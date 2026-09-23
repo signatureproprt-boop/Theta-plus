@@ -87,7 +87,7 @@ def test_dhan_client_is_readonly():
     # when the client was aligned with the current official DhanHQ v2 contract).
     assert set(public) == {
         "configured", "get_index_quote", "get_index_ltp", "get_option_chain",
-        "get_expiry_list", "get_nearest_expiry", "BASE_URL",
+        "get_expiry_list", "get_nearest_expiry", "get_index_minute_candles", "BASE_URL",
     }
 
 
