@@ -278,7 +278,10 @@ class Pipeline:
         # Phase F — record the chart marker for this decision (serialization only).
         from chart.markers import link_invalidations, marker_from_decision
 
-        self.chart_markers.append(marker_from_decision(decision, features))
+        chart_marker = marker_from_decision(decision, features)
+        if self.feed.name == "dhan":
+            chart_marker = chart_marker.model_copy(update={"data_origin_label": "LIVE • DHAN DATA"})
+        self.chart_markers.append(chart_marker)
         marker = link_invalidations(list(self.chart_markers))[-1]
 
         # Phase G — alerts (contained: a Telegram outage never reaches the engines).

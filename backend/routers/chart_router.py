@@ -83,7 +83,8 @@ async def chart_signals(
     else:
         pipeline = get_pipeline()
         all_markers = link_invalidations(list(pipeline.chart_markers))
-        notes = (LIVE_NOTE, AUTHORITY_NOTE)
+        real_feed = pipeline.feed.name == "dhan"
+        notes = (("Dhan market-data feed selected; live broker data quality remains subject to timestamp and candle checks." if real_feed else LIVE_NOTE), AUTHORITY_NOTE)
         decision, features = pipeline.decision, pipeline.features
         spot = features.spot if features else None
         vwap = features.vwap.vwap if features else None
@@ -98,7 +99,7 @@ async def chart_signals(
         timeframe="5",
         timezone=config.timezone,
         data_origin=origin,
-        data_origin_label=origin_label(origin),
+        data_origin_label=("LIVE • DHAN DATA" if origin == ORIGIN_LIVE and pipeline.feed.name == "dhan" else origin_label(origin)),
         include_wait=include_wait,
         generated_at=now,
         count=len(shown),
@@ -133,6 +134,9 @@ async def chart_latest() -> Optional[ChartSignalMarker]:
     pipeline = get_pipeline()
     if pipeline.decision is None:
         return None
-    return marker_from_decision(
+    marker = marker_from_decision(
         pipeline.decision, pipeline.features, data_origin=ORIGIN_LIVE
     ).model_copy(update={"timestamp": to_ist(pipeline.decision.timestamp)})
+    if pipeline.feed.name == "dhan":
+        marker = marker.model_copy(update={"data_origin_label": "LIVE • DHAN DATA"})
+    return marker

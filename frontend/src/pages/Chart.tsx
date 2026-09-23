@@ -14,6 +14,7 @@ import ChartControls from "@/components/chart/ChartControls";
 import SignalMarkerList from "@/components/chart/SignalMarkerList";
 import SignalDetailPanel from "@/components/chart/SignalDetailPanel";
 import PaperLevelsPanel from "@/components/chart/PaperLevelsPanel";
+import DecisionTrace from "@/components/chart/DecisionTrace";
 
 // Phase F — NIFTY 5m chart research screen.
 // TradingView = visualization only. Backend = strategy authority for VWAP,
@@ -24,15 +25,16 @@ export default function Chart() {
   const [selected, setSelected] = useState<ChartSignalMarker | undefined>();
 
   const { data, isError } = useQuery({
-    queryKey: ["chart-signals", origin, includeWait],
+    queryKey: ["chart-signals", origin],
     queryFn: () =>
       apiGet<ChartSignalsResponse>(
-        `/chart/signals?origin=${encodeURIComponent(origin)}&include_wait=${includeWait}`,
+        `/chart/signals?origin=${encodeURIComponent(origin)}&include_wait=true&limit=500`,
       ),
     refetchInterval: origin === "LIVE" ? 5000 : false,
   });
 
-  const markers = data?.markers ?? [];
+  const observations = data?.markers ?? [];
+  const markers = includeWait ? observations : observations.filter((m) => m.marker_kind !== "WAIT");
 
   // Keep the detail panel in sync with the selected origin/marker set.
   useEffect(() => {
@@ -83,6 +85,14 @@ export default function Chart() {
         />
 
         <TradingViewWidget symbol={data?.tradingview_symbol ?? "NSE:NIFTY"} interval="5" />
+
+        <DecisionTrace markers={observations} selectedId={selected?.signal_id} onSelect={setSelected} />
+
+        {(data?.latest_decision === "WAIT" || data?.stale || isError) && (
+          <div data-testid="chart-current-wait" className="rounded-lg border border-amber-700 bg-[#2A1B05] px-4 py-3 font-mono text-xs text-amber-300">
+            CURRENT STATUS: WAIT — {isError ? "signal feed unavailable" : data?.stale ? "data stale" : "no current setup"}. Older markers below are historical and are not current entry calls.
+          </div>
+        )}
 
         <p data-testid="chart-vwap-authority-note" className="font-sans text-[10px] leading-relaxed text-[#4B5563]">
           TradingView VWAP = visual reference only. Backend VWAP (shown below) is the
