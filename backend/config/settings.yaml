@@ -1,0 +1,106 @@
+# =============================================================================
+# NIFTY PCR + OI + VWAP — Signal-Only Research System (V1)
+# -----------------------------------------------------------------------------
+# Single source of truth for every strategy parameter. Code must read config,
+# never hardcode. Invalid values must fail clearly (ConfigError), never degrade.
+# =============================================================================
+
+config_version: "1.0"
+strategy_version: "1.0.0"
+feature_engine_version: "1.0.0"   # reported inside every SignalDecision
+
+instrument: "NIFTY"        # V1 is NIFTY-only (architecture supports future expansion)
+enabled: true              # SYSTEM_ENABLED kill switch: false => WAIT / SYSTEM_DISABLED
+
+# --- Session windows (Asia/Kolkata wall clock) ---
+market_open: "09:15"
+market_close: "15:30"
+signal_start_time: "11:30"   # before this => WAIT / TIME_FILTER_BEFORE_START
+signal_end_time: "15:15"     # last eligible evaluation time
+signal_end_inclusive: true   # true: 15:15 itself is eligible; 15:16 is not
+timezone: "Asia/Kolkata"
+
+# --- Instrument / data ---
+strike_interval: 50          # never assume; read from chain metadata when available
+atm_range: 3                 # ATM +/- 3 strikes feed the ATM-range PCR
+pcr_lookback: 5              # PCR trend window (snapshot samples, incl. current)
+max_data_age_seconds: 10     # data older than this is STALE
+pcr_flat_band: 0.02          # |PCR change| <= band over lookback => FLAT
+
+# --- Price structure (Phase B features; no new indicators in V1) ---
+price_lookback: 5            # bars used for short-term direction / high-low
+price_flat_band_pct: 0.01    # % move band around flat (0.01% of NIFTY ~ 2.5 pts)
+
+# --- Decision ---
+minimum_score: 70            # side qualifies only at >= this score (out of 100)
+signal_cooldown_minutes: 10  # after an emitted setup, no new setup for this long
+
+# --- Research target / stop (points; mechanical, NOT optimal, NOT guaranteed) ---
+target_points: 35
+stoploss_points: 30
+
+# --- Rule weights: MUST sum to exactly 100 (validated at load) ---
+weights:
+  pcr_trend: 20
+  vwap: 25
+  oi_support: 20
+  oi_change: 15
+  atm_proximity: 10
+  price_confirmation: 10
+
+# --- Phase D: runtime pipeline + Sheets adapter (strategy-neutral knobs) ---
+pipeline_interval_seconds: 5   # one feed->features->decision iteration per N sec
+data_source: "sim"             # sim | dhan (dhan requires DHAN_* credentials)
+sheets_flush_seconds: 30       # batched Sheets writes, never per-tick
+sheets_enabled: true           # master gate; credentials also required
+
+# --- Phase E: replay / backtest (VALIDATION ONLY — strategy stays frozen) ---
+replay_enabled: false
+replay_include_pre_signal_data: true   # pre-11:30 data feeds PCR history + VWAP
+replay_strict_ordering: false          # false: sort deterministically; true: reject
+backtest_brokerage_per_trade: 0.0      # zeros => results are labeled HYPOTHETICAL
+backtest_slippage_points: 0.0
+backtest_charges: 0.0
+backtest_quantity: 1                   # research quantity; never inferred from capital
+backtest_time_windows:
+  - "11:30-12:00"
+  - "12:00-13:00"
+  - "13:00-14:00"
+  - "14:00-15:00"
+  - "15:00-15:15"
+vwap_near_points: 10.0
+
+# --- Phase G: alerts + PAPER trading (ZERO broker execution; see §28) ---
+system_mode: "RESEARCH"          # RESEARCH | PAPER  (LIVE EXECUTION = NOT IMPLEMENTED)
+alerts_enabled: true             # master gate; Telegram also needs TELEGRAM_* env vars
+alert_wait_alerts: false         # WAIT decisions are never alerted by default
+paper_trading_enabled: true      # RESEARCH mode opt-in: research simulation ON (no broker)
+max_open_paper_positions: 1      # duplicate-position protection
+paper_quantity: 1                # research quantity; never inferred from capital
+paper_slippage_points: 0.0       # assumed; zeros => P&L labeled HYPOTHETICAL
+paper_costs_per_trade: 0.0       # assumed brokerage/charges per paper trade
+
+# --- Phase H: LIVE execution infrastructure (DEFAULT = OFF, DISARMED) -------
+# A fresh deployment places NO live orders. Enabling requires BOTH the config
+# flags below AND the server-side env switches LIVE_EXECUTION_ENABLED=true and
+# LIVE_EXECUTION_ARMED=true (two-step arming). There is no UI/API arming path.
+live_execution_enabled: false
+live_execution_armed: false
+live_quantity: 1                 # explicit operator value; NEVER derived from capital
+live_order_type: "LIMIT"         # LIMIT | MARKET | STOP_LOSS | STOP_LOSS_MARKET
+live_product_type: "INTRADAY"    # Dhan productType
+live_validity: "DAY"             # DAY | IOC
+execution_adapter: "mock"        # mock | dhan (dhan also needs DHAN_* credentials)
+
+risk_enabled: true
+risk_max_trades_per_day: 3
+risk_max_open_positions: 1
+risk_max_quantity: 1
+risk_max_daily_loss: 0.0         # loss magnitude; 0 => any realized loss locks execution
+risk_max_slippage_points: 0.0    # 0 => reference and market price must match exactly
+
+# --- Invalidation rules (deterministic thresholds only; no vague terms) ---
+invalidation:
+  vwap_cross: true           # CE: spot crosses below VWAP => invalidate; PE: above
+  pcr_reversal: true         # PCR moves against the side by >= pcr_reversal_delta
+  pcr_reversal_delta: 0.15
