@@ -209,6 +209,7 @@ class OrderRecord(BaseModel):
     signal_id: str
     broker_order_id: Optional[str] = None
     broker_status: Optional[str] = None  # raw Dhan orderStatus
+    broker_confirmed: bool = False
     status: str = ORDER_REQUESTED  # internal lifecycle
     mode: str = MODE_LIVE
 
@@ -216,6 +217,7 @@ class OrderRecord(BaseModel):
     security_id: str = ""
     exchange_segment: str = "NSE_FNO"
     transaction_type: str = "BUY"
+    product_type: str = "INTRADAY"
     order_type: str = "LIMIT"
 
     requested_quantity: int = 0

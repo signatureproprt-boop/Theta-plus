@@ -29,7 +29,7 @@ class PositionReconciliationService:
         self.report = ReconciliationReport(state=RECON_PENDING, blocks_execution=True,
                                            detail="not reconciled yet")
 
-    async def reconcile(self, internal_open: int = 0) -> ReconciliationReport:
+    async def reconcile(self, internal_open: int = 0, expected_positions: Optional[dict] = None) -> ReconciliationReport:
         now = datetime.now(IST)
         try:
             positions = await self.adapter.get_positions()
@@ -47,13 +47,18 @@ class PositionReconciliationService:
             return self.report
 
         open_positions: tuple[BrokerPosition, ...] = tuple(p for p in positions if p.net_qty != 0)
-        if len(open_positions) != internal_open:
+        actual = {}
+        for position in open_positions:
+            key = (position.exchange_segment, position.security_id, position.product_type)
+            actual[key] = actual.get(key, 0) + position.net_qty
+        actual = {key: qty for key, qty in actual.items() if qty}
+        if len(open_positions) != internal_open or (expected_positions is not None and actual != expected_positions):
             self.report = ReconciliationReport(
                 state=RECON_MISMATCH, checked_at=now,
                 internal_open_positions=internal_open, broker_open_positions=len(open_positions),
                 unexpected_broker_positions=open_positions,
                 detail=(f"internal open positions={internal_open} but broker reports "
-                        f"{len(open_positions)}; new entries blocked until resolved"),
+                        f"{len(open_positions)}; contract quantities must also match; entries blocked until resolved"),
                 blocks_execution=True,
             )
             return self.report
