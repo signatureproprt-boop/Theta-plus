@@ -72,7 +72,12 @@ from pathlib import Path
 service=json.load(open(sys.argv[1]));project=sys.argv[3]
 env={e['name']:e for e in service['spec']['template']['spec']['containers'][0].get('env',[])}
 def access(name,version='latest'):
-    return subprocess.check_output(['gcloud','secrets','versions','access',version,'--secret='+name,'--project='+project],text=True).strip()
+    secret_project=project
+    if name.startswith('projects/'):
+        parts=name.split('/')
+        assert len(parts)==4 and parts[2]=='secrets','Unexpected secret path'
+        secret_project,name=parts[1],parts[3]
+    return subprocess.check_output(['gcloud','secrets','versions','access',version,'--secret='+name,'--project='+secret_project],text=True).strip()
 entry=env['DHAN_CLIENT_ID']
 if 'value' in entry:client=entry['value'].strip()
 else:
