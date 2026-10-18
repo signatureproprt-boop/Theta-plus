@@ -36,6 +36,7 @@ def build_features(
     bars: Sequence[Bar] = (),
     pcr_history: Sequence[tuple[datetime, float]] = (),
     prev_snapshot: Optional[MarketSnapshot] = None,
+    vwap_bars: Optional[Sequence[Bar]] = None,
 ) -> MarketFeatures:
     """Build the deterministic feature set for one snapshot.
 
@@ -87,7 +88,10 @@ def build_features(
     oi = compute_oi(snapshot.chain, prev_oi)
 
     # --- VWAP / price structure ---------------------------------------------
-    vwap = vwap_features(spot, list(bars))
+    volume_bars = list(bars) if vwap_bars is None else list(vwap_bars)
+    # Compare futures to their own VWAP; never mix spot/futures price bases.
+    reference = volume_bars[-1].close if vwap_bars is not None and volume_bars else spot
+    vwap = vwap_features(reference, volume_bars)
     price = price_features(spot, list(bars), config.price_lookback, config.price_flat_band_pct)
 
     # --- Data health (snapshot-level + feature-level overlay) ---------------

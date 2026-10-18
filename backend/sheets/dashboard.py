@@ -51,7 +51,7 @@ DECISION_LABELS = {
 RULE_LABELS = {
     "CE": {
         "PCR_CONFIRMATION": "PCR confirmation",
-        "VWAP_CONFIRMATION": "Spot above VWAP",
+        "VWAP_CONFIRMATION": "Reference price above VWAP",
         "OI_SUPPORT": "Put OI support",
         "OI_CHANGE_SUPPORT": "Put OI change support",
         "ATM_DATA_VALID": "ATM/option data valid",
@@ -59,7 +59,7 @@ RULE_LABELS = {
     },
     "PE": {
         "PCR_CONFIRMATION": "PCR confirmation",
-        "VWAP_CONFIRMATION": "Spot below VWAP",
+        "VWAP_CONFIRMATION": "Reference price below VWAP",
         "OI_SUPPORT": "Call OI support",
         "OI_CHANGE_SUPPORT": "Call OI change support",
         "ATM_DATA_VALID": "ATM/option data valid",
@@ -142,6 +142,8 @@ def build_dashboard(
             index=config.instrument,
             spot=features.spot,
             vwap=features.vwap.vwap,
+            vwap_source=features.vwap.source,
+            vwap_reference_price=features.vwap.reference_price,
             vwap_distance=features.vwap.distance,
             vwap_distance_percent=features.vwap.distance_percent,
             above_vwap=features.vwap.above_vwap,

@@ -65,7 +65,7 @@ def test_signal_mapping_ce_setup():
     assert p.signal.decision == "CE SETUP"  # display label
     assert p.signal.decision_code == "CE_SETUP"
     assert (p.signal.ce_score, p.signal.ce_max_score) == (100, 100)
-    assert "Spot above VWAP" in p.signal.confirmed
+    assert "Reference price above VWAP" in p.signal.confirmed
     assert "PCR confirmation" in p.signal.confirmed
     assert "Put OI support" in p.signal.confirmed
 
@@ -75,7 +75,7 @@ def test_signal_mapping_pe_setup():
     assert p.signal.decision == "PE SETUP"
     assert p.signal.decision_code == "PE_SETUP"
     assert (p.signal.pe_score, p.signal.pe_max_score) == (100, 100)
-    assert "Spot below VWAP" in p.signal.confirmed
+    assert "Reference price below VWAP" in p.signal.confirmed
     assert "Call OI support" in p.signal.confirmed
 
 

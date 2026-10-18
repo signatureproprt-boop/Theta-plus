@@ -159,3 +159,14 @@ class DhanMarketData:
                 "Expiry": expiry,
             },
         )
+
+    async def get_session_candles(self, security_id: str, segment: str, instrument: str, now: datetime) -> dict:
+        """Official /v2/charts/intraday; one-minute bars, no quote-volume synthesis."""
+        from lib.dates import to_ist
+        at = to_ist(now)
+        return await self._post("/v2/charts/intraday", {
+            "securityId": security_id, "exchangeSegment": segment,
+            "instrument": instrument, "interval": "1", "oi": False,
+            "fromDate": at.replace(hour=9, minute=15, second=0, microsecond=0).strftime("%Y-%m-%d %H:%M:%S"),
+            "toDate": at.strftime("%Y-%m-%d %H:%M:%S"),
+        })

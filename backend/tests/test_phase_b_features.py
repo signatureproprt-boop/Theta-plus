@@ -126,9 +126,9 @@ def test_vwap_from_ohlcv():
     assert compute_vwap(bars) == 175.0  # (100*1 + 200*3) / 4
 
 
-def test_vwap_zero_volume_fallback():
+def test_vwap_zero_volume_is_unavailable():
     bars = [Bar(high=100, low=100, close=100, volume=0), Bar(high=200, low=200, close=200, volume=0)]
-    assert compute_vwap(bars) == 150.0  # documented fallback: mean typical price
+    assert compute_vwap(bars) is None
 
 
 def test_vwap_distance_and_flags():

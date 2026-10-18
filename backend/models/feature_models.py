@@ -84,6 +84,8 @@ class VwapFeatures(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     vwap: Optional[float] = None
+    source: str = "ohlcv"
+    reference_price: Optional[float] = None
     distance: Optional[float] = None
     distance_percent: Optional[float] = None
     above_vwap: bool = False

@@ -93,7 +93,7 @@ def pcr_row(features: MarketFeatures, atm_pcr_change: Optional[float], atm_pcr_t
 def signal_row(decision: SignalDecision, features: MarketFeatures) -> list[Any]:
     return [
         decision.timestamp.isoformat(), decision.symbol, _fmt_num(decision.spot), _fmt_num(decision.vwap),
-        _fmt_num(decision.vwap - decision.spot, 2) if decision.vwap is not None and decision.spot is not None else "",
+        _fmt_num(features.vwap.distance, 2),
         decision.atm if decision.atm is not None else "",
         _fmt_num(decision.pcr, 4),
         _fmt_num(features.pcr.atm_pcr, 4),

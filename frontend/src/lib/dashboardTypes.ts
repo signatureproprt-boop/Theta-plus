@@ -13,6 +13,8 @@ export interface MarketPanel {
   index: string;
   spot: number | null;
   vwap: number | null;
+  vwap_source?: string;
+  vwap_reference_price?: number | null;
   vwap_distance: number | null;
   vwap_distance_percent: number | null;
   above_vwap: boolean;

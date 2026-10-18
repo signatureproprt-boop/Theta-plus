@@ -110,10 +110,45 @@ class DhanFeed:
         self._bars: dict[str, list[Bar]] = {}
         self._last_minute: dict[str, datetime] = {}
         self._fallback_interval = fallback_interval
-        self._expiry = ""   # resolved from Dhan's official expiry list, never guessed
+        self._expiry = ""   # resolved from the official expiry list
+        self._vwap_bars = {}
+        self._candles_at = None
 
     def get_bars(self, date_iso: str) -> list[Bar]:
         return self._bars.get(date_iso, [])
+
+    def get_vwap_bars(self, date_iso: str) -> list[Bar]:
+        return self._vwap_bars.get(date_iso, [])
+
+    async def refresh_candles(self, now):
+        import json
+        import os
+        from pathlib import Path
+        from data.session_candles import closed_session_bars
+        minute = now.replace(second=0, microsecond=0)
+        date_iso = now.date().isoformat()
+        if minute == self._candles_at:
+            return
+        # Clear first: failed refresh must not silently reuse stale VWAP.
+        self._bars[date_iso] = []
+        self._vwap_bars[date_iso] = []
+        raw = await self.client.get_session_candles("13", "IDX_I", "INDEX", now)
+        self._bars[date_iso] = closed_session_bars(raw, now, "NIFTY_SPOT")
+        self._candles_at = minute
+        map_path = os.environ.get("DHAN_INSTRUMENT_MAP_PATH", "")
+        if not map_path:
+            return  # no verified futures mapping => VWAP unavailable
+        data = json.loads(Path(map_path).read_text())
+        rows = data if isinstance(data, list) else data.get("instruments", [])
+        candidates = [r for r in rows if r.get("underlying") == "NIFTY"
+            and r.get("instrument_type") == "FUTIDX" and r.get("exchange_segment") == "NSE_FNO"
+            and r.get("security_id") and r.get("expiry", "") >= date_iso]
+        if not candidates:
+            return
+        ref = min(candidates, key=lambda r: r["expiry"])
+        raw = await self.client.get_session_candles(str(ref["security_id"]), "NSE_FNO", "FUTIDX", now)
+        self._vwap_bars[date_iso] = closed_session_bars(raw, now, "NIFTY_FUTURES")
+        self._candles_at = minute
 
     async def get_snapshot(self, now: datetime) -> MarketSnapshot:
         """One REAL Dhan snapshot: market quote + option chain for the expiry
@@ -137,12 +172,7 @@ class DhanFeed:
             # engine answers WAIT instead of trading on a guess.
             raise DhanDataError(f"Dhan payload rejected: {exc}") from None
 
-        date_iso = now.date().isoformat()
-        bars = self._bars.setdefault(date_iso, [])
-        minute = tick.timestamp.replace(second=0, microsecond=0)
-        if not bars or self._last_minute.get(date_iso) != minute:
-            bars.append(Bar(high=tick.high, low=tick.low, close=tick.close, volume=float(tick.volume)))
-            self._last_minute[date_iso] = minute
+        await self.refresh_candles(now)
         return MarketSnapshot(
             snapshot_id=f"dhan-{int(now.timestamp())}",
             timestamp=now,
@@ -233,6 +263,7 @@ class Pipeline:
         features = build_features(
             snapshot, self.config, bars=bars,
             pcr_history=list(self._pcr_hist), prev_snapshot=self._prev_snapshot,
+            vwap_bars=(self.feed.get_vwap_bars(date_iso) if hasattr(self.feed, "get_vwap_bars") else None),
         )
         if features.pcr.total_pcr is not None:
             self._pcr_hist.append((features.timestamp, features.pcr.total_pcr))
