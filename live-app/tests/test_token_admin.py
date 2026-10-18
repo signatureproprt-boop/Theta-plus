@@ -103,3 +103,32 @@ def test_admin_unlock_never_returns_secret(app):
     r=c.post('/api/admin/check',json={},headers={'X-Theta-Admin-Password':'fixture-admin-password'})
     assert r.status_code==200 and r.json()=={'authorised':True}
     assert 'fixture-admin-password' not in r.text
+
+
+def test_setup_retries_without_echoing_password(tmp_path, monkeypatch, capsys):
+    import getpass, sys
+    from pathlib import Path
+    script=(Path(__file__).parents[1]/'deploy/configure-token-admin.sh').read_text()
+    code=script.split("<<'PYHASH'\n",1)[1].split('\nPYHASH',1)[0]
+    values=iter(['', 'short', 'é'*16, 'valid-password-123','different-password', 'chosen-password-123','chosen-password-123'])
+    monkeypatch.setattr(getpass,'getpass',lambda prompt:next(values))
+    target=tmp_path/'hash'
+    monkeypatch.setattr(sys,'argv',['setup',str(target)])
+    exec(compile(code,'setup','exec'),{})
+    output=capsys.readouterr().out
+    assert 'Received 0 characters' in output and 'English keyboard' in output and 'two entries differ' in output
+    assert 'chosen-password-123' not in output and 'valid-password-123' not in output
+    assert admin_auth.verify_password('chosen-password-123',target.read_text())
+
+
+def test_setup_password_cancel_does_not_write(tmp_path,monkeypatch):
+    import getpass,sys
+    from pathlib import Path
+    script=(Path(__file__).parents[1]/'deploy/configure-token-admin.sh').read_text()
+    code=script.split("<<'PYHASH'\n",1)[1].split('\nPYHASH',1)[0]
+    def cancel(prompt):raise EOFError()
+    monkeypatch.setattr(getpass,'getpass',cancel)
+    target=tmp_path/'hash'
+    monkeypatch.setattr(sys,'argv',['setup',str(target)])
+    with pytest.raises(SystemExit,match='cancelled'):exec(compile(code,'setup','exec'),{})
+    assert not target.exists()
