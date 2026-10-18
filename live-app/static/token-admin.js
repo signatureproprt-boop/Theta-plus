@@ -19,7 +19,7 @@
       if(!response.ok){credential='';enable(false);throw Error(result.detail||'Admin password check failed.');}
       const settings=await adminCall('settings',{});
       document.getElementById('dhan-client-id').value=settings.client_id||'';
-      enable(true);message(settings.editable?'Admin unlocked. Client ID stays saved.':'Connection storage setup is pending.');
+      enable(true);message(settings.editable?'Admin unlocked. Client ID stays saved. Collection controls are unlocked too.':'Connection storage setup is pending.');
     } catch(error){ message(error.message); }
   });
   function candidate(){return {client_id:document.getElementById('dhan-client-id').value.trim()||null,token:field().value||null};}
@@ -34,6 +34,13 @@
     if(!response.ok){if(response.status===403){credential='';enable(false);}throw Error(typeof result.detail==='string'?result.detail:'Connection check failed.');}
     return result;
   }
+  window.thetaAdminRequest=async (path,body={}) => {
+    if(!credential)throw Error('Open Admin and unlock with your password first.');
+    const response=await fetch('/api/'+path,{method:'POST',signal:AbortSignal.timeout(240000),headers:{'Content-Type':'application/json','X-Theta-Admin-Password':credential},body:JSON.stringify(body)});
+    const result=await response.json();
+    if(!response.ok){if(response.status===403){credential='';enable(false);}throw Error(typeof result.detail==='string'?result.detail:'Collection request failed. Check inputs and status.');}
+    return result;
+  };
   window.thetaSaveDhanToken=async () => {
     const body=candidate();field().value='';field().type='password';enable(false);
     try{const result=await adminCall('save',body);await load();document.getElementById('dhan-client-id').value=body.client_id;showResult(result);message('Connection saved. Client ID will remain here for future updates.');toast('Dhan connection checked and saved.');}
