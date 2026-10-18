@@ -25,7 +25,7 @@ def candles():
 
 @pytest.fixture
 def app(tmp_path,monkeypatch):
-    for name in ('K_SERVICE','THETA_GCS_BUCKET','DHAN_ACCESS_TOKEN','THETA_DHAN_TOKEN_SECRET','DHAN_CLIENT_ID'):
+    for name in ('THETA_AUTH_MODE','K_SERVICE','THETA_GCS_BUCKET','DHAN_ACCESS_TOKEN','THETA_DHAN_TOKEN_SECRET','DHAN_CLIENT_ID'):
         monkeypatch.delenv(name,raising=False)
     monkeypatch.setenv('THETA_API_KEY','fixture-key')
     monkeypatch.setattr(server,'datetime',Clock)
@@ -126,3 +126,19 @@ def test_provider_recovery_clears_failure_gate(app,monkeypatch):
     monkeypatch.setattr(server.time,'monotonic',lambda:131)
     assert c.post('/api/refresh',json={}).status_code==200
     assert c.post('/api/plans',json=plan()).json()['allowed']
+
+
+def test_public_workspace_needs_no_key_and_blocks_token_changes(tmp_path, monkeypatch):
+    monkeypatch.setenv('THETA_AUTH_MODE', 'public')
+    monkeypatch.setenv('THETA_API_KEY', 'old-private-key')
+    monkeypatch.delenv('K_SERVICE', raising=False)
+    monkeypatch.delenv('THETA_GCS_BUCKET', raising=False)
+    c = TestClient(server.create_app(tmp_path/'public.sqlite3'))
+    status = c.get('/api/status')
+    assert status.status_code == 200
+    assert status.json()['auth_mode'] == 'public'
+    assert status.json()['token_screen_enabled'] is False
+    assert c.get('/api/datasets').status_code == 200
+    assert c.post('/api/dhan/token', json={'token':'x'*40}).status_code == 403
+    assert c.post('/api/refresh', json={}, headers={'Origin':'https://foreign.test'}).status_code == 403
+    assert c.get('/api/status', headers={'Host':'foreign.test'}).status_code == 400
