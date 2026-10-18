@@ -63,7 +63,31 @@ if ! gcloud secrets describe "$admin_secret" --project="$project" >/dev/null 2>&
 fi
 admin_version=$(gcloud secrets versions add "$admin_secret" --project="$project" --data-file="$work/admin-hash" --format='value(name)')
 gcloud secrets add-iam-policy-binding "$admin_secret" --project="$project" --member="serviceAccount:$account" --role=roles/secretmanager.secretAccessor >/dev/null
+# Seed a single atomic credential pair from existing configuration; never display values.
+pair_secret=theta-dhan-connection
+if ! gcloud secrets describe "$pair_secret" --project="$project" >/dev/null 2>&1; then
+  python3 - "$work/service.json" "$work/connection.json" "$project" "$secret" <<'PYPAIR'
+import json,subprocess,sys
+from pathlib import Path
+service=json.load(open(sys.argv[1]));project=sys.argv[3]
+env={e['name']:e for e in service['spec']['template']['spec']['containers'][0].get('env',[])}
+def access(name,version='latest'):
+    return subprocess.check_output(['gcloud','secrets','versions','access',version,'--secret='+name,'--project='+project],text=True).strip()
+entry=env['DHAN_CLIENT_ID']
+if 'value' in entry:client=entry['value'].strip()
+else:
+    ref=entry['valueFrom']['secretKeyRef'];client=access(ref['name'],ref.get('key','latest'))
+token=access(sys.argv[4])
+assert client and token,'Existing credentials missing'
+Path(sys.argv[2]).write_text(json.dumps({'client_id':client,'token':token}))
+PYPAIR
+  chmod 600 "$work/connection.json"
+  gcloud secrets create "$pair_secret" --project="$project" --replication-policy=automatic --data-file="$work/connection.json" >/dev/null
+fi
+for role in roles/secretmanager.secretAccessor roles/secretmanager.secretVersionAdder; do
+  gcloud secrets add-iam-policy-binding "$pair_secret" --project="$project" --member="serviceAccount:$account" --role="$role" >/dev/null
+done
 gcloud run services update "$service" --project="$project" --region="$region" \
-  --update-env-vars="THETA_DHAN_TOKEN_SECRET=$secret" \
+  --update-env-vars="THETA_DHAN_TOKEN_SECRET=$secret,THETA_DHAN_CREDENTIALS_SECRET=projects/$project/secrets/$pair_secret" \
   --update-secrets="THETA_TOKEN_ADMIN_HASH=$admin_secret:${admin_version##*/}" --quiet
 echo 'Token admin configured. Dhan Client ID unchanged. Deploy the token-admin release next.'

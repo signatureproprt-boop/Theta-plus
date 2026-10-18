@@ -132,3 +132,65 @@ def test_setup_password_cancel_does_not_write(tmp_path,monkeypatch):
     monkeypatch.setattr(sys,'argv',['setup',str(target)])
     with pytest.raises(SystemExit,match='cancelled'):exec(compile(code,'setup','exec'),{})
     assert not target.exists()
+
+
+@pytest.mark.parametrize('path',['settings','test','save'])
+def test_admin_connection_routes_require_password(app,path):
+    assert TestClient(app).post('/api/admin/dhan/'+path,json={}).status_code==403
+
+
+def test_connection_settings_never_return_saved_token(app,monkeypatch):
+    monkeypatch.setenv('THETA_DHAN_CREDENTIALS_SECRET','projects/test/secrets/pair')
+    monkeypatch.setattr(server.DhanCredentials,'pair',lambda self:{'client_id':'fixed-client','token':'never-return-this-secret'})
+    c=TestClient(app)
+    r=c.post('/api/admin/dhan/settings',json={},headers={'X-Theta-Admin-Password':'fixture-admin-password'})
+    assert r.status_code==200 and r.json()['client_id']=='fixed-client'
+    assert 'never-return-this-secret' not in r.text
+
+
+def test_connection_test_does_not_save(app,monkeypatch):
+    async def check(token,client):return {'status':'AUTHENTICATED','market_data_verified':False}
+    monkeypatch.setattr(server,'check_token',check)
+    saves=[]
+    monkeypatch.setattr(server.DhanCredentials,'save_pair',lambda *a:saves.append(a))
+    r=TestClient(app).post('/api/admin/dhan/test',json={'client_id':'new-client','token':'x'*30},headers={'X-Theta-Admin-Password':'fixture-admin-password'})
+    assert r.status_code==200 and r.json()['saved'] is False and not saves
+
+
+def test_connection_save_checks_then_saves_pair(app,monkeypatch):
+    monkeypatch.setenv('THETA_DHAN_CREDENTIALS_SECRET','projects/test/secrets/pair')
+    events=[]
+    async def check(token,client):
+        events.append(('check',client,token));return {'status':'AUTHENTICATED'}
+    monkeypatch.setattr(server,'check_token',check)
+    monkeypatch.setattr(server.DhanCredentials,'save_pair',lambda self,c,t:events.append(('save',c,t)))
+    r=TestClient(app).post('/api/admin/dhan/save',json={'client_id':'new-client','token':'x'*30},headers={'X-Theta-Admin-Password':'fixture-admin-password'})
+    assert r.status_code==200 and events==[('check','new-client','x'*30),('save','new-client','x'*30)]
+    assert 'x'*30 not in r.text
+
+
+def test_atomic_pair_cross_worker_and_failed_save(monkeypatch):
+    from credentials import DhanCredentials,CredentialError
+    import json
+    from types import SimpleNamespace
+    monkeypatch.setenv('THETA_DHAN_CREDENTIALS_SECRET','projects/test/secrets/pair')
+    class Secret:
+        data=json.dumps({'client_id':'old-client','token':'old-token-'+'x'*30}).encode()
+        fail=False
+        def access_secret_version(self,request):return SimpleNamespace(payload=SimpleNamespace(data=self.data))
+        def add_secret_version(self,request):
+            if self.fail:raise RuntimeError()
+            self.data=request['payload']['data']
+    secret=Secret();worker=DhanCredentials(secret_client=secret,cache_seconds=0)
+    assert worker.client_id=='old-client'
+    worker.save_pair('new-client','new-token-'+'x'*30)
+    reader=DhanCredentials(secret_client=secret,cache_seconds=0)
+    assert reader.client_id=='new-client' and reader.token()=='new-token-'+'x'*30
+    secret.fail=True
+    with pytest.raises(CredentialError):worker.save_pair('bad-client','bad-token-'+'x'*30)
+    assert reader.client_id=='new-client'
+
+
+def test_admin_page_exists_without_login(app):
+    page=TestClient(app).get('/').text
+    assert 'data-page="admin"' in page and 'id="page-admin"' in page

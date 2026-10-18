@@ -32,6 +32,10 @@ ROOT=Path(__file__).parent
 class DhanTokenInput(Model):
     token: str = Field(min_length=20,max_length=4096)
 
+class DhanConnectionInput(Model):
+    client_id: str | None = Field(default=None,min_length=1,max_length=60)
+    token: str | None = Field(default=None,min_length=20,max_length=4096)
+
 class AuditInput(Model):
     day: date
 
@@ -160,7 +164,7 @@ def create_app(db_path=None):
         return {'version':VERSION,'dhan_configured':provider.configured,'provider_error':last_error,
                 'client_id_configured':bool(credential_source.client_id),
                 'auth_mode':'public' if public_workspace else 'workspace_key',
-                'token_screen_enabled':bool(credential_source.secret_name) and admin_config(),
+                'token_screen_enabled':bool(credential_source.pair_secret or credential_source.secret_name) and admin_config(),
                 'credential_check':(store.rows('credential_status',1) or [{}])[0].get('data'),
                 'request_refresh':os.environ.get('THETA_REQUEST_REFRESH')=='true' and session_open(datetime.now(timezone.utc)),
                 'execution':'NO_BROKER_EXECUTION','strategy_validation':'UNVALIDATED_RESEARCH',
@@ -182,10 +186,38 @@ def create_app(db_path=None):
         require_admin(request)
         return {'authorised':True}
 
+    @app.post('/api/admin/dhan/settings')
+    def dhan_settings(request:Request):
+        require_admin(request)
+        try:client=credential_source.client_id
+        except CredentialError as exc:raise HTTPException(503,str(exc)) from None
+        return {'client_id':client,'token_saved':provider.configured,
+                'editable':bool(credential_source.pair_secret)}
+
+    @app.post('/api/admin/dhan/test')
+    async def dhan_test(payload:DhanConnectionInput,request:Request):
+        require_admin(request)
+        try:
+            result=await check_token(payload.token or credential_source.token(),payload.client_id or credential_source.client_id)
+        except CredentialError as exc:raise HTTPException(503,str(exc)) from None
+        return {**result,'saved':False,'message':'Authentication checked. Live quote freshness is checked separately.'}
+
+    @app.post('/api/admin/dhan/save')
+    async def dhan_save(payload:DhanConnectionInput,request:Request):
+        require_admin(request)
+        if not payload.client_id or not payload.token:raise HTTPException(422,'Enter Client ID and a new token')
+        if not credential_source.pair_secret:raise HTTPException(503,'Admin connection storage needs one-time setup')
+        result=await check_token(payload.token,payload.client_id)
+        try:credential_source.save_pair(payload.client_id,payload.token)
+        except CredentialError as exc:raise HTTPException(503,str(exc)) from None
+        result['checked_at']=datetime.now(timezone.utc).isoformat()
+        store.add('credential_status',result)
+        return {'saved':True,**result}
+
     @app.post('/api/dhan/token')
     async def rotate_dhan_token(payload:DhanTokenInput,request:Request):
         require_admin(request)
-        if not credential_source.secret_name:raise HTTPException(503,'Token storage needs one-time Secret Manager setup')
+        if not (credential_source.pair_secret or credential_source.secret_name):raise HTTPException(503,'Token storage needs one-time Secret Manager setup')
         result=await check_token(payload.token,credential_source.client_id)
         try:credential_source.update_token(payload.token)
         except CredentialError as exc:raise HTTPException(503,str(exc)) from None
