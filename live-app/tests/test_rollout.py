@@ -28,3 +28,17 @@ def test_wrong_identity_times_out():
         m.wait_for_health('http://test', 'v', 'new', timeout=5, fetch=lambda *a: {},
             clock=lambda: now[0], sleep=lambda n: now.__setitem__(0, now[0] + n))
     assert now[0] == 5
+
+
+def test_public_health_path_avoids_cloud_run_reserved_suffix(monkeypatch):
+    import io
+    seen = []
+    class Response(io.StringIO):
+        def __enter__(self): return self
+        def __exit__(self, *args): self.close()
+    def open_url(url, timeout):
+        seen.append(url)
+        return Response('{}')
+    monkeypatch.setattr(m.urllib.request, 'urlopen', open_url)
+    assert m.fetch_health('https://example.test/', 2) == {}
+    assert seen == ['https://example.test/health-check']

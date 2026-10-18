@@ -44,7 +44,7 @@ def plan():
 
 def test_health_and_auth_boundary_preserved(app):
     c=TestClient(app)
-    assert c.get('/healthz').json()==dict(status='ok',version=VERSION,execution='NO_BROKER_EXECUTION',revision='local')
+    assert c.get('/health-check').json()==dict(status='ok',version=VERSION,execution='NO_BROKER_EXECUTION',revision='local')
     assert c.get('/api/status').status_code==401
     assert 'page-room' in c.get('/').text
     assert client(app).get('/api/status').json()['execution']=='NO_BROKER_EXECUTION'

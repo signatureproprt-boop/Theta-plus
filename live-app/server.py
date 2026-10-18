@@ -146,7 +146,7 @@ def create_app(db_path=None):
         candles=store.rows('live_candles',1)
         return sorted([Snapshot.model_validate(r['data']) for r in rows],key=lambda s:s.timestamp),[Candle.model_validate(c) for c in candles[0]['data']['candles']] if candles else [],'PROVIDER'
 
-    @app.get('/healthz')
+    @app.get('/health-check')
     def health():
         # Public release identity only; no data, credentials or provider state.
         return {'status':'ok','version':VERSION,'execution':'NO_BROKER_EXECUTION',

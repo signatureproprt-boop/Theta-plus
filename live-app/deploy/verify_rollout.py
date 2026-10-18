@@ -6,7 +6,7 @@ import urllib.request
 
 
 def fetch_health(url, timeout):
-    with urllib.request.urlopen(url.rstrip('/') + '/healthz', timeout=timeout) as response:
+    with urllib.request.urlopen(url.rstrip('/') + '/health-check', timeout=timeout) as response:
         return json.load(response)
 
 
