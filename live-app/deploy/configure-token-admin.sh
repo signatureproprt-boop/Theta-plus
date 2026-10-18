@@ -7,6 +7,33 @@ region=asia-south1
 service=theta-plus
 work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT
+# The password is entered only in the terminal; only its salted hash is saved.
+python3 - "$work/admin-hash" <<'PYHASH'
+import getpass,hashlib,secrets,sys
+from pathlib import Path
+print('Password input is hidden. Type 12+ English letters/numbers, then press Enter.',flush=True)
+for attempt in range(5):
+    try:
+        password=getpass.getpass('Choose token-admin password: ')
+        if not 12<=len(password)<=512:
+            print(f'Received {len(password)} characters. Need 12–512. Please try again.',flush=True)
+            continue
+        if not password.isascii() or not all(32<=ord(c)<127 for c in password):
+            print('Use English keyboard: letters, numbers or standard symbols. Please try again.',flush=True)
+            continue
+        if password!=getpass.getpass('Repeat the same password: '):
+            print('The two entries differ. Please try again.',flush=True)
+            continue
+        break
+    except (EOFError,KeyboardInterrupt):
+        raise SystemExit('Password entry cancelled; configuration was not changed.') from None
+else:
+    raise SystemExit('Password not accepted after 5 attempts; configuration was not changed.')
+salt=secrets.token_hex(32)
+digest=hashlib.pbkdf2_hmac('sha256',password.encode(),bytes.fromhex(salt),600000).hex()
+Path(sys.argv[1]).write_text(f'pbkdf2_sha256$600000${salt}${digest}')
+PYHASH
+chmod 600 "$work/admin-hash"
 gcloud run services describe "$service" --project="$project" --region="$region" --format=json > "$work/service.json"
 python3 - "$work/service.json" "$work" "$project" <<'PY'
 import json,sys,re
@@ -30,18 +57,6 @@ gcloud secrets describe "$secret" --project="$project" >/dev/null
 for role in roles/secretmanager.secretAccessor roles/secretmanager.secretVersionAdder; do
   gcloud secrets add-iam-policy-binding "$secret" --project="$project" --member="serviceAccount:$account" --role="$role" >/dev/null
 done
-# The password is entered only in the terminal; only its salted hash is saved.
-python3 - "$work/admin-hash" <<'PYHASH'
-import getpass,hashlib,secrets,sys
-from pathlib import Path
-password=getpass.getpass('Choose token-admin password (minimum 12 characters): ')
-assert 12<=len(password)<=512 and password.isascii() and all(32<=ord(c)<127 for c in password),'Use 12–512 printable ASCII characters'
-assert password==getpass.getpass('Repeat admin password: '),'Passwords do not match'
-salt=secrets.token_hex(32)
-digest=hashlib.pbkdf2_hmac('sha256',password.encode(),bytes.fromhex(salt),600000).hex()
-Path(sys.argv[1]).write_text(f'pbkdf2_sha256$600000${salt}${digest}')
-PYHASH
-chmod 600 "$work/admin-hash"
 admin_secret=theta-token-admin-password-hash
 if ! gcloud secrets describe "$admin_secret" --project="$project" >/dev/null 2>&1; then
   gcloud secrets create "$admin_secret" --project="$project" --replication-policy=automatic >/dev/null
