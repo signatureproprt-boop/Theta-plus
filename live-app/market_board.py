@@ -6,7 +6,7 @@ import math
 import time
 from datetime import datetime, date, timezone
 import httpx
-from engine import IST
+from runtime import IST
 from provider import ProviderError
 
 MASTER_URL='https://images.dhan.co/api-data/api-scrip-master-detailed.csv'
