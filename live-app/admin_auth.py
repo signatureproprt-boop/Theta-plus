@@ -1,29 +1,28 @@
-"""Google ID-token verification for credential administration only."""
+"""Separate credential-admin password; public trading screens stay keyless."""
+import hashlib
+import hmac
 import os
 from fastapi import HTTPException
-from google.oauth2 import id_token
-from google.auth.transport.requests import Request as GoogleRequest
 
 
 def admin_config():
-    client = os.environ.get('THETA_GOOGLE_CLIENT_ID', '').strip()
-    emails = {e.strip().lower() for e in os.environ.get('THETA_ADMIN_EMAILS', '').split(',') if e.strip()}
-    return client, emails
+    return bool(os.environ.get('THETA_TOKEN_ADMIN_HASH','').strip())
+
+
+def verify_password(password, encoded):
+    try:
+        algorithm, rounds, salt, expected = encoded.split('$')
+        if algorithm!='pbkdf2_sha256' or rounds!='600000':return False
+        if not 16<=len(salt)<=128 or len(expected)!=64:return False
+        actual=hashlib.pbkdf2_hmac('sha256',password.encode(),bytes.fromhex(salt),600000).hex()
+        return hmac.compare_digest(actual,expected)
+    except (ValueError,TypeError):return False
 
 
 def require_admin(request):
-    client, emails = admin_config()
-    if not client or not emails:
-        raise HTTPException(503, 'Google admin sign-in needs one-time setup')
-    credential = request.headers.get('x-theta-admin-id-token', '')
-    if not credential or len(credential) > 16384:
-        raise HTTPException(403, 'Sign in with your authorised Google admin account')
-    try:
-        claims = id_token.verify_oauth2_token(credential, GoogleRequest(), audience=client)
-    except Exception:
-        raise HTTPException(403, 'Google admin sign-in expired or invalid; sign in again') from None
-    email = claims.get('email', '').lower()
-    authoritative = email.endswith('@gmail.com') or bool(claims.get('hd'))
-    if not claims.get('sub') or claims.get('email_verified') is not True or not authoritative or email not in emails:
-        raise HTTPException(403, 'This Google account is not an authorised administrator')
-    return claims['sub']
+    encoded=os.environ.get('THETA_TOKEN_ADMIN_HASH','').strip()
+    if not encoded:raise HTTPException(503,'Token admin password needs one-time setup')
+    password=request.headers.get('x-theta-admin-password','')
+    if not password or len(password)>512 or not verify_password(password,encoded):
+        raise HTTPException(403,'Token admin password is incorrect')
+    return 'token-admin'

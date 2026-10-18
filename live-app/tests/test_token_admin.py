@@ -8,43 +8,29 @@ import server
 import token_check
 
 
-def identity(email='owner@gmail.com', **changes):
-    return dict(sub='google-user-1', email=email, email_verified=True, **changes)
-
-
 @pytest.fixture
 def admin(monkeypatch):
-    monkeypatch.setenv('THETA_GOOGLE_CLIENT_ID', 'web-client')
-    monkeypatch.setenv('THETA_ADMIN_EMAILS', 'owner@gmail.com')
-    monkeypatch.setattr(admin_auth.id_token, 'verify_oauth2_token', lambda *a, **kw: identity())
+    import hashlib
+    salt='12'*32
+    digest=hashlib.pbkdf2_hmac('sha256',b'fixture-admin-password',bytes.fromhex(salt),600000).hex()
+    monkeypatch.setenv('THETA_TOKEN_ADMIN_HASH',f'pbkdf2_sha256$600000${salt}${digest}')
 
 
-def request():
-    return Request({'type':'http', 'headers':[(b'x-theta-admin-id-token',b'google-id-token')]})
+def request(password):
+    return Request({'type':'http','headers':[(b'x-theta-admin-password',password.encode())]})
 
 
-def test_admin_audience_is_enforced(admin, monkeypatch):
-    seen = []
-    def verify(token, transport, audience):
-        seen.append((token,audience))
-        return identity()
-    monkeypatch.setattr(admin_auth.id_token, 'verify_oauth2_token', verify)
-    assert admin_auth.require_admin(request()) == 'google-user-1'
-    assert seen == [('google-id-token','web-client')]
+def test_admin_password_required(admin):
+    assert admin_auth.require_admin(request('fixture-admin-password'))=='token-admin'
+    for value in ('','wrong','google-id-token'):
+        with pytest.raises(HTTPException) as error:admin_auth.require_admin(request(value))
+        assert error.value.status_code==403
 
 
-@pytest.mark.parametrize('claims', [identity('other@gmail.com'), dict(identity(),email_verified=False), dict(identity(),sub='')])
-def test_non_admin_rejected(admin, monkeypatch, claims):
-    monkeypatch.setattr(admin_auth.id_token,'verify_oauth2_token',lambda *a, **kw: claims)
-    with pytest.raises(HTTPException) as error: admin_auth.require_admin(request())
-    assert error.value.status_code == 403
-
-
-def test_invalid_google_signature_rejected(admin, monkeypatch):
-    def fail(*a, **kw): raise ValueError('untrusted')
-    monkeypatch.setattr(admin_auth.id_token,'verify_oauth2_token', fail)
-    with pytest.raises(HTTPException) as error: admin_auth.require_admin(request())
-    assert error.value.status_code == 403
+def test_malformed_hash_fails_closed(monkeypatch):
+    monkeypatch.setenv('THETA_TOKEN_ADMIN_HASH','broken')
+    with pytest.raises(HTTPException) as error:admin_auth.require_admin(request('fixture-admin-password'))
+    assert error.value.status_code==403
 
 
 @pytest.fixture
@@ -57,7 +43,7 @@ def app(tmp_path, monkeypatch, admin):
     return server.create_app(tmp_path/'token.sqlite3')
 
 
-def test_no_google_login_cannot_update_token(app):
+def test_no_admin_password_cannot_update_token(app):
     c=TestClient(app)
     assert c.post('/api/dhan/token',json={'token':'x'*30}).status_code == 403
     assert c.get('/api/status').status_code == 200
@@ -72,7 +58,7 @@ def test_check_before_save_and_no_token_return(app, monkeypatch):
     monkeypatch.setattr(server.DhanCredentials,'update_token',lambda self, token:events.append(('save',token)))
     c=TestClient(app)
     token='candidate-secret-'+'x'*30
-    r=c.post('/api/dhan/token',json={'token':token},headers={'X-Theta-Admin-ID-Token':'google-id-token'})
+    r=c.post('/api/dhan/token',json={'token':token},headers={'X-Theta-Admin-Password':'fixture-admin-password'})
     assert r.status_code == 200
     assert events == [('check','fixed-client'),('save',token)]
     assert token not in r.text
@@ -86,7 +72,7 @@ def test_bad_candidate_never_saved(app,monkeypatch):
     monkeypatch.setattr(server,'check_token',check)
     saves=[]
     monkeypatch.setattr(server.DhanCredentials,'update_token',lambda *a:saves.append(a))
-    r=TestClient(app).post('/api/dhan/token',json={'token':'x'*30},headers={'X-Theta-Admin-ID-Token':'id-token'})
+    r=TestClient(app).post('/api/dhan/token',json={'token':'x'*30},headers={'X-Theta-Admin-Password':'fixture-admin-password'})
     assert r.status_code==422 and not saves
 
 
@@ -109,3 +95,11 @@ def test_dhan_profile_check(monkeypatch,status,profile,expected):
     else:
         with pytest.raises(HTTPException) as error:asyncio.run(token_check.check_token('candidate','fixed'))
         assert error.value.status_code==expected
+
+
+def test_admin_unlock_never_returns_secret(app):
+    c=TestClient(app)
+    assert c.post('/api/admin/check',json={}).status_code==403
+    r=c.post('/api/admin/check',json={},headers={'X-Theta-Admin-Password':'fixture-admin-password'})
+    assert r.status_code==200 and r.json()=={'authorised':True}
+    assert 'fixture-admin-password' not in r.text
