@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# Source-only update for the already configured Theta Plus Cloud Run service.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+project=theta-pluse
+region=asia-south1
+service=theta-plus
+expected_version=theta-research-2.3.1
+command -v gcloud >/dev/null
+command -v curl >/dev/null
+work=$(mktemp -d)
+promoted=false
+rollback=''
+cleanup() {
+  code=$?
+  if [[ $code -ne 0 && $promoted == true ]]; then
+    echo 'Smoke check failed; restoring original revision traffic.' >&2
+    gcloud run services update-traffic "$service" --project="$project" --region="$region" --to-revisions="$rollback" --quiet || echo 'ROLLBACK FAILED: inspect Cloud Run immediately.' >&2
+  fi
+  rm -rf -- "$work"
+  exit "$code"
+}
+trap cleanup EXIT
+gcloud run services describe "$service" --project="$project" --region="$region" --format=json > "$work/before.json"
+python3 - "$work/before.json" "$work" <<'PY'
+import json,re,sys
+from pathlib import Path
+s=json.load(open(sys.argv[1]));dest=Path(sys.argv[2])
+traffic={t['revisionName']:t['percent'] for t in s['status']['traffic'] if t.get('percent',0)>0}
+assert sum(traffic.values())==100 and all(re.fullmatch(r'[a-z0-9-]+',k) for k in traffic),'Invalid traffic mapping'
+(dest/'rollback').write_text(','.join(f'{k}={v}' for k,v in sorted(traffic.items())))
+(dest/'url').write_text(s['status']['url'])
+# This file can contain runtime configuration; never print or upload it.
+PY
+rollback=$(cat "$work/rollback")
+url=$(cat "$work/url")
+build_account="projects/$project/serviceAccounts/theta-plus-build@$project.iam.gserviceaccount.com"
+# Existing account only; no creation, IAM edits, secrets or configuration reset.
+gcloud iam service-accounts describe "theta-plus-build@$project.iam.gserviceaccount.com" --project="$project" --format='value(email)' >/dev/null
+suffix="r231-$(date -u +%Y%m%d%H%M%S)"
+candidate="$service-$suffix"
+echo "Building candidate $candidate; existing traffic remains unchanged."
+gcloud run deploy "$service" --source=. --project="$project" --region="$region" \
+  --build-service-account="$build_account" --revision-suffix="$suffix" --no-traffic --quiet
+gcloud run revisions describe "$candidate" --project="$project" --region="$region" --format=json > "$work/candidate.json"
+python3 - "$work/candidate.json" <<'PY'
+import json,sys
+r=json.load(open(sys.argv[1]))
+assert any(c['type']=='Ready' and c['status']=='True' for c in r['status']['conditions']),'Candidate not ready'
+PY
+gcloud run services describe "$service" --project="$project" --region="$region" --format=json > "$work/current.json"
+python3 - "$work/before.json" "$work/current.json" <<'PY'
+import json,sys
+def traffic(p):
+ return {t['revisionName']:t['percent'] for t in json.load(open(p))['status']['traffic'] if t.get('percent',0)>0}
+assert traffic(sys.argv[1])==traffic(sys.argv[2]),'Traffic changed during build; deployment stopped before promotion'
+PY
+promoted=true
+gcloud run services update-traffic "$service" --project="$project" --region="$region" --to-revisions="$candidate=100" --quiet
+# Warm-up retries are bounded; all requests are read-only.
+curl --fail --silent --show-error --retry 3 --retry-delay 2 --max-time 30 "$url/healthz" > "$work/health.json"
+python3 - "$work/health.json" "$expected_version" "$candidate" <<'PY'
+import json,sys
+h=json.load(open(sys.argv[1]))
+assert h['status']=='ok' and h['version']==sys.argv[2] and h['revision']==sys.argv[3],h
+assert h['execution']=='NO_BROKER_EXECUTION',h
+PY
+curl --fail --silent --show-error --max-time 30 "$url/" > "$work/index.html"
+python3 - "$work/index.html" <<'PY'
+import sys
+s=open(sys.argv[1]).read()
+assert 'page-room' in s and 'Strategy lab' in s and 'Data connections' in s,'Existing UI missing'
+PY
+status=$(curl --silent --show-error --max-time 30 --output /dev/null --write-out '%{http_code}' "$url/api/status")
+[[ $status == 401 ]] || { echo "API protection failed: HTTP $status" >&2; exit 1; }
+promoted=false
+printf '\nDEPLOY VERIFIED\nVersion: %s\nRevision: %s\nURL: %s\n' "$expected_version" "$candidate" "$url"
+printf 'Rollback if needed: gcloud run services update-traffic %s --project=%s --region=%s --to-revisions=%s\n' "$service" "$project" "$region" "$rollback"
