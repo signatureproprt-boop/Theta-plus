@@ -54,8 +54,9 @@ class ContractMetadata(Model):
     lot_size: int = Field(gt=0,le=100000)
 
 def create_app(db_path=None):
+    public_workspace=os.environ.get('THETA_AUTH_MODE')=='public'
     bucket=os.environ.get('THETA_GCS_BUCKET')
-    if os.environ.get('K_SERVICE') and (not bucket or not os.environ.get('THETA_API_KEY')):
+    if os.environ.get('K_SERVICE') and (not bucket or (not public_workspace and not os.environ.get('THETA_API_KEY'))):
         raise RuntimeError('Cloud Run requires durable THETA_GCS_BUCKET and THETA_API_KEY')
     if bucket and db_path is None:
         from cloud_store import CloudStore
@@ -110,7 +111,7 @@ def create_app(db_path=None):
         if request.url.path.startswith('/api/'):
             key=os.environ.get('THETA_API_KEY','')
             given=request.headers.get('authorization','').removeprefix('Bearer ')
-            if key and not secrets.compare_digest(key,given):return JSONResponse({'detail':'Workspace access key required'},status_code=401)
+            if not public_workspace and key and not secrets.compare_digest(key,given):return JSONResponse({'detail':'Workspace access key required'},status_code=401)
             origin=request.headers.get('origin')
             if origin and origin!=f'{request.url.scheme}://{request.headers.get("host")}':return JSONResponse({'detail':'Cross-origin API access rejected'},status_code=403)
             if request.method=='POST':
@@ -156,7 +157,8 @@ def create_app(db_path=None):
     def status():
         return {'version':VERSION,'dhan_configured':provider.configured,'provider_error':last_error,
                 'client_id_configured':bool(credential_source.client_id),
-                'token_screen_enabled':bool(credential_source.secret_name),
+                'auth_mode':'public' if public_workspace else 'workspace_key',
+                'token_screen_enabled':not public_workspace and bool(credential_source.secret_name),
                 'request_refresh':os.environ.get('THETA_REQUEST_REFRESH')=='true' and session_open(datetime.now(timezone.utc)),
                 'execution':'NO_BROKER_EXECUTION','strategy_validation':'UNVALIDATED_RESEARCH',
                 'context_sources':'Timestamped user import; automatic global/FII feeds not connected',
@@ -170,6 +172,7 @@ def create_app(db_path=None):
 
     @app.post('/api/dhan/token')
     def rotate_dhan_token(payload:DhanTokenInput):
+        if public_workspace:raise HTTPException(403,'Token changes require server-side administration in public mode')
         try:credential_source.update_token(payload.token)
         except CredentialError as exc:raise HTTPException(503,str(exc)) from None
         return {'updated':True,'message':'Dhan token saved. Token is never returned.'}

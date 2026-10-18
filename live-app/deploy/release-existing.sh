@@ -5,7 +5,7 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 project=theta-pluse
 region=asia-south1
 service=theta-plus
-expected_version=theta-research-2.3.1
+expected_version=theta-research-2.3.2
 command -v gcloud >/dev/null
 command -v curl >/dev/null
 work=$(mktemp -d)
@@ -36,17 +36,17 @@ rollback=$(cat "$work/rollback")
 url=$(cat "$work/url")
 candidate=${1:-}
 if [[ -n $candidate ]]; then
-  [[ $candidate =~ ^theta-plus-r231-[0-9]{14}$ ]] || { echo 'Invalid candidate revision' >&2; exit 1; }
+  [[ $candidate =~ ^theta-plus-r232-[0-9]{14}$ ]] || { echo 'Invalid candidate revision' >&2; exit 1; }
   echo "Reusing candidate $candidate."
 else
   build_account="projects/$project/serviceAccounts/theta-plus-build@$project.iam.gserviceaccount.com"
   # Existing account only; no creation, IAM edits, secrets or configuration reset.
   gcloud iam service-accounts describe "theta-plus-build@$project.iam.gserviceaccount.com" --project="$project" --format='value(email)' >/dev/null
-  suffix="r231-$(date -u +%Y%m%d%H%M%S)"
+  suffix="r232-$(date -u +%Y%m%d%H%M%S)"
   candidate="$service-$suffix"
   echo "Building candidate $candidate; existing traffic remains unchanged."
   gcloud run deploy "$service" --source=. --project="$project" --region="$region" \
-    --build-service-account="$build_account" --revision-suffix="$suffix" --no-traffic --quiet
+    --build-service-account="$build_account" --revision-suffix="$suffix" --update-env-vars=THETA_AUTH_MODE=public --no-traffic --quiet
 fi
 gcloud run revisions describe "$candidate" --project="$project" --region="$region" --format=json > "$work/candidate.json"
 python3 - "$work/candidate.json" <<'PY'
@@ -72,7 +72,13 @@ s=open(sys.argv[1]).read()
 assert 'page-room' in s and 'Strategy lab' in s and 'Data connections' in s,'Existing UI missing'
 PY
 status=$(curl --silent --show-error --max-time 30 --output /dev/null --write-out '%{http_code}' "$url/api/status")
-[[ $status == 401 ]] || { echo "API protection failed: HTTP $status" >&2; exit 1; }
+[[ $status == 200 ]] || { echo "Public API check failed: HTTP $status" >&2; exit 1; }
+curl --fail --silent --show-error --max-time 30 "$url/api/status" > "$work/status.json"
+python3 - "$work/status.json" <<'PYVERIFY'
+import json,sys
+s=json.load(open(sys.argv[1]))
+assert s['auth_mode']=='public' and not s['token_screen_enabled'],'Public mode/token protection mismatch'
+PYVERIFY
 promoted=false
 printf '\nDEPLOY VERIFIED\nVersion: %s\nRevision: %s\nURL: %s\n' "$expected_version" "$candidate" "$url"
 printf 'Rollback if needed: gcloud run services update-traffic %s --project=%s --region=%s --to-revisions=%s\n' "$service" "$project" "$region" "$rollback"
