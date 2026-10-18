@@ -12,7 +12,7 @@ import json
 from models import Candle, Snapshot, Contract, Dataset, Experiment
 
 IST=ZoneInfo('Asia/Kolkata')
-VERSION='theta-research-2.3.2'
+VERSION='theta-research-2.3.3'
 
 def session(t):
     return t.astimezone(IST).date()

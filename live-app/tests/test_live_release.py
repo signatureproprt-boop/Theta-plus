@@ -133,6 +133,9 @@ def test_public_workspace_needs_no_key_and_blocks_token_changes(tmp_path, monkey
     monkeypatch.setenv('THETA_API_KEY', 'old-private-key')
     monkeypatch.delenv('K_SERVICE', raising=False)
     monkeypatch.delenv('THETA_GCS_BUCKET', raising=False)
+    monkeypatch.setenv('THETA_GOOGLE_CLIENT_ID','fixture-client')
+    monkeypatch.setenv('THETA_ADMIN_EMAILS','owner@gmail.com')
+    monkeypatch.delenv('THETA_DHAN_TOKEN_SECRET',raising=False)
     c = TestClient(server.create_app(tmp_path/'public.sqlite3'))
     status = c.get('/api/status')
     assert status.status_code == 200
