@@ -194,3 +194,23 @@ def test_atomic_pair_cross_worker_and_failed_save(monkeypatch):
 def test_admin_page_exists_without_login(app):
     page=TestClient(app).get('/').text
     assert 'data-page="admin"' in page and 'id="page-admin"' in page
+
+
+def test_setup_normalizes_secret_access_resource_path(tmp_path,monkeypatch):
+    import json,sys,subprocess
+    from pathlib import Path
+    script=(Path(__file__).parents[1]/'deploy/configure-token-admin.sh').read_text()
+    code=script.split("<<'PYPAIR'\n",1)[1].split('\nPYPAIR',1)[0]
+    config=tmp_path/'service.json';dest=tmp_path/'pair.json'
+    config.write_text(json.dumps({'spec':{'template':{'spec':{'containers':[{'env':[{'name':'DHAN_CLIENT_ID','valueFrom':{'secretKeyRef':{'name':'projects/other-project/secrets/client-id','key':'3'}}}]}]}}}}))
+    calls=[]
+    def access(args,**kwargs):
+        calls.append(args)
+        return 'client-value' if '--secret=client-id' in args else 'test-token'
+    monkeypatch.setattr(subprocess,'check_output',access)
+    monkeypatch.setattr(sys,'argv',['setup',str(config),str(dest),'theta-pluse','projects/theta-pluse/secrets/theta-dhan-access-token'])
+    exec(compile(code,'setup','exec'),{})
+    assert '--secret=client-id' in calls[0] and '--project=other-project' in calls[0]
+    assert '--secret=theta-dhan-access-token' in calls[1] and '--project=theta-pluse' in calls[1]
+    assert not any('--secret=projects/' in arg for args in calls for arg in args)
+    assert json.loads(dest.read_text())=={'client_id':'client-value','token':'test-token'}
