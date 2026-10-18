@@ -5,7 +5,7 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 project=theta-pluse
 region=asia-south1
 service=theta-plus
-expected_version=theta-research-2.3.5
+expected_version=theta-foundation-3.0.0
 command -v gcloud >/dev/null
 command -v curl >/dev/null
 work=$(mktemp -d)
@@ -36,13 +36,13 @@ rollback=$(cat "$work/rollback")
 url=$(cat "$work/url")
 candidate=${1:-}
 if [[ -n $candidate ]]; then
-  [[ $candidate =~ ^theta-plus-r235-[0-9]{14}$ ]] || { echo 'Invalid candidate revision' >&2; exit 1; }
+  [[ $candidate =~ ^theta-plus-f300-[0-9]{14}$ ]] || { echo 'Invalid candidate revision' >&2; exit 1; }
   echo "Reusing candidate $candidate."
 else
   build_account="projects/$project/serviceAccounts/theta-plus-build@$project.iam.gserviceaccount.com"
   # Existing account only; no creation, IAM edits, secrets or configuration reset.
   gcloud iam service-accounts describe "theta-plus-build@$project.iam.gserviceaccount.com" --project="$project" --format='value(email)' >/dev/null
-  suffix="r235-$(date -u +%Y%m%d%H%M%S)"
+  suffix="f300-$(date -u +%Y%m%d%H%M%S)"
   candidate="$service-$suffix"
   echo "Building candidate $candidate; existing traffic remains unchanged."
   gcloud run deploy "$service" --source=. --project="$project" --region="$region" \
@@ -69,7 +69,8 @@ curl --fail --silent --show-error --max-time 30 "$url/" > "$work/index.html"
 python3 - "$work/index.html" <<'PY'
 import sys
 s=open(sys.argv[1]).read()
-assert 'page-room' in s and 'Strategy lab' in s and 'Data connections' in s,'Existing UI missing'
+assert 'page-home' in s and 'page-admin' in s and 'Saved data' in s,'Foundation UI missing'
+assert 'page-room' not in s and 'Strategy lab' not in s,'Retired UI still present'
 PY
 status=$(curl --silent --show-error --max-time 30 --output /dev/null --write-out '%{http_code}' "$url/api/status")
 [[ $status == 200 ]] || { echo "Public API check failed: HTTP $status" >&2; exit 1; }
@@ -81,6 +82,9 @@ assert s['auth_mode']=='public','Public mode mismatch'
 PYVERIFY
 admin_status=$(curl --silent --show-error --max-time 30 --output /dev/null --write-out '%{http_code}'   -H 'Content-Type: application/json' --data '{"token":"rollout-probe-not-a-real-token"}' "$url/api/dhan/token")
 [[ $admin_status == 403 || $admin_status == 503 ]] || { echo "Token admin protection failed: HTTP $admin_status" >&2; exit 1; }
+retired_status=$(curl --silent --show-error --max-time 30 --output /dev/null --write-out '%{http_code}' "$url/api/overview")
+[[ $retired_status == 410 ]] || { echo "Old analysis still available: HTTP $retired_status" >&2; exit 1; }
+curl --fail --silent --show-error --max-time 30 "$url/api/dhan/collected" > "$work/retained-data.json"
 promoted=false
 printf '\nDEPLOY VERIFIED\nVersion: %s\nRevision: %s\nURL: %s\n' "$expected_version" "$candidate" "$url"
 printf 'Rollback if needed: gcloud run services update-traffic %s --project=%s --region=%s --to-revisions=%s\n' "$service" "$project" "$region" "$rollback"

@@ -2,7 +2,7 @@
 from datetime import date, datetime, timedelta, timezone
 from collections import Counter
 import time
-from engine import IST
+from runtime import IST
 from provider import ProviderError
 
 INDEX_IDS={'nifty':13}  # Other IDs are resolved from the current Dhan instrument master.
