@@ -34,14 +34,20 @@ assert sum(traffic.values())==100 and all(re.fullmatch(r'[a-z0-9-]+',k) for k in
 PY
 rollback=$(cat "$work/rollback")
 url=$(cat "$work/url")
-build_account="projects/$project/serviceAccounts/theta-plus-build@$project.iam.gserviceaccount.com"
-# Existing account only; no creation, IAM edits, secrets or configuration reset.
-gcloud iam service-accounts describe "theta-plus-build@$project.iam.gserviceaccount.com" --project="$project" --format='value(email)' >/dev/null
-suffix="r231-$(date -u +%Y%m%d%H%M%S)"
-candidate="$service-$suffix"
-echo "Building candidate $candidate; existing traffic remains unchanged."
-gcloud run deploy "$service" --source=. --project="$project" --region="$region" \
-  --build-service-account="$build_account" --revision-suffix="$suffix" --no-traffic --quiet
+candidate=${1:-}
+if [[ -n $candidate ]]; then
+  [[ $candidate =~ ^theta-plus-r231-[0-9]{14}$ ]] || { echo 'Invalid candidate revision' >&2; exit 1; }
+  echo "Reusing candidate $candidate."
+else
+  build_account="projects/$project/serviceAccounts/theta-plus-build@$project.iam.gserviceaccount.com"
+  # Existing account only; no creation, IAM edits, secrets or configuration reset.
+  gcloud iam service-accounts describe "theta-plus-build@$project.iam.gserviceaccount.com" --project="$project" --format='value(email)' >/dev/null
+  suffix="r231-$(date -u +%Y%m%d%H%M%S)"
+  candidate="$service-$suffix"
+  echo "Building candidate $candidate; existing traffic remains unchanged."
+  gcloud run deploy "$service" --source=. --project="$project" --region="$region" \
+    --build-service-account="$build_account" --revision-suffix="$suffix" --no-traffic --quiet
+fi
 gcloud run revisions describe "$candidate" --project="$project" --region="$region" --format=json > "$work/candidate.json"
 python3 - "$work/candidate.json" <<'PY'
 import json,sys
@@ -57,14 +63,8 @@ assert traffic(sys.argv[1])==traffic(sys.argv[2]),'Traffic changed during build;
 PY
 promoted=true
 gcloud run services update-traffic "$service" --project="$project" --region="$region" --to-revisions="$candidate=100" --quiet
-# Warm-up retries are bounded; all requests are read-only.
-curl --fail --silent --show-error --retry 3 --retry-delay 2 --max-time 30 "$url/healthz" > "$work/health.json"
-python3 - "$work/health.json" "$expected_version" "$candidate" <<'PY'
-import json,sys
-h=json.load(open(sys.argv[1]))
-assert h['status']=='ok' and h['version']==sys.argv[2] and h['revision']==sys.argv[3],h
-assert h['execution']=='NO_BROKER_EXECUTION',h
-PY
+# Poll through routing propagation, requiring the exact candidate identity.
+python3 deploy/verify_rollout.py "$url" "$expected_version" "$candidate"
 curl --fail --silent --show-error --max-time 30 "$url/" > "$work/index.html"
 python3 - "$work/index.html" <<'PY'
 import sys
