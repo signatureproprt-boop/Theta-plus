@@ -13,6 +13,7 @@ a completed reconciliation.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 from collections import deque
@@ -41,6 +42,7 @@ from models.execution_models import (
     BROKER_STATUS_MAP,
     MODE_LIVE,
     MODE_RESEARCH,
+    ORDER_CANCELLED,
     ORDER_ACKNOWLEDGED,
     ORDER_FILLED,
     ORDER_PARTIALLY_FILLED,
@@ -87,6 +89,7 @@ class ExecutionService:
         self.risk_state = RiskState()
         self.reconciler = PositionReconciliationService(self.adapter)
         self.orders: dict[str, OrderRecord] = {}
+        self._entry_lock = asyncio.Lock()
         self.log: deque[ExecutionLogEntry] = deque(maxlen=500)
         self.last_block_reason = ""
         self.kill_switch = _env_flag("SYSTEM_KILL_SWITCH")
@@ -128,7 +131,12 @@ class ExecutionService:
         return side, strike, ltp, ref
 
     # --- the single execution path ----------------------------------------
-    async def attempt_entry(
+    async def attempt_entry(self, *args, **kwargs) -> ExecutionDecision:
+        # Gate and reservation are atomic within this service, including retries.
+        async with self._entry_lock:
+            return await self._attempt_entry(*args, **kwargs)
+
+    async def _attempt_entry(
         self,
         decision: Optional[SignalDecision],
         features: Optional[MarketFeatures],
@@ -204,6 +212,7 @@ class ExecutionService:
         # Persist the idempotency key BEFORE submission so a duplicate request
         # can never produce a second broker order.
         self.orders[order.client_order_id] = record
+        self._refresh_exposure()
         self.risk_state.trades_today += 1
 
         try:
@@ -248,15 +257,28 @@ class ExecutionService:
             pass
         return record
 
+    def _refresh_exposure(self) -> None:
+        """Each pending/unknown entry reserves a slot; any fill retains its slot.
+
+        A rejected/cancelled order releases only its unfilled reservation.
+        Filled exposure is not released on cancellation of the remainder.
+        Durable recovery and confirmed exit accounting remain separate work.
+        """
+        self.risk_state.open_positions = sum(
+            1 for order in self.orders.values()
+            if order.filled_quantity > 0 or order.status not in (ORDER_REJECTED, ORDER_CANCELLED)
+        )
+
     # --- lifecycle ---------------------------------------------------------
     def _update(self, record: OrderRecord, **fields) -> OrderRecord:
         new = record.model_copy(update={**fields, "updated_at": datetime.now(IST)})
         self.orders[new.client_order_id] = new
+        self._refresh_exposure()
         return new
 
     def _apply_broker_state(self, record: OrderRecord, state: BrokerOrderState) -> OrderRecord:
         status = BROKER_STATUS_MAP.get(state.broker_status, ORDER_UNKNOWN)
-        filled = state.filled_quantity
+        filled = max(record.filled_quantity, state.filled_quantity)
         remaining = state.remaining_quantity or max(record.requested_quantity - filled, 0)
         if status == ORDER_FILLED and filled < record.requested_quantity and filled > 0:
             status = ORDER_PARTIALLY_FILLED  # never treat a partial as full

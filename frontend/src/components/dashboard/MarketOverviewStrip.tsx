@@ -7,9 +7,9 @@ export default function MarketOverviewStrip({ market }: { market?: Market }) {
     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
       <MetricTile label="Index" value={market?.index ?? "—"} testid="market-index-value" />
       <MetricTile label="Spot" value={fmtNum(market?.spot)} testid="market-spot-value" />
-      <MetricTile label="VWAP" value={fmtNum(market?.vwap)} testid="market-vwap-value" />
+      <MetricTile label={market?.vwap_source === "NIFTY_FUTURES" ? "Futures VWAP" : "VWAP"} value={fmtNum(market?.vwap)} testid="market-vwap-value" />
       <MetricTile
-        label="VWAP Distance"
+        label={market?.vwap_source === "NIFTY_FUTURES" ? "Futures close − VWAP" : "VWAP Distance"}
         value={market ? fmtSigned(distance) : "—"}
         testid="market-vwap-distance-value"
         tone={market ? (market.above_vwap ? "text-[#34D399]" : market.below_vwap ? "text-[#F87171]" : "") : undefined}

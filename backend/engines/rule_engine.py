@@ -77,9 +77,9 @@ def evaluate_ce_rules(features, config) -> tuple[RuleResult, ...]:
     yield_vwap = _result(
         RULE_VWAP, side, w.vwap,
         vwap.valid and vwap.vwap is not None, vwap.above_vwap,
-        f"spot {f.spot:.2f} vs VWAP {_fmt(vwap.vwap)} (distance {_fmt(vwap.distance)})",
-        ("Underlying is above session VWAP" if vwap.valid and vwap.above_vwap
-         else "Underlying is not above session VWAP" if vwap.valid
+        f"reference {_fmt(vwap.reference_price if vwap.reference_price is not None else f.spot)} vs VWAP {_fmt(vwap.vwap)} (distance {_fmt(vwap.distance)})",
+        ("Reference price is above same-instrument session VWAP" if vwap.valid and vwap.above_vwap
+         else "Reference price is not above same-instrument session VWAP" if vwap.valid
          else f"VWAP unavailable: {vwap.reason}"),
     )
 
@@ -157,9 +157,9 @@ def evaluate_pe_rules(features, config) -> tuple[RuleResult, ...]:
     yield_vwap = _result(
         RULE_VWAP, side, w.vwap,
         vwap.valid and vwap.vwap is not None, vwap.below_vwap,
-        f"spot {f.spot:.2f} vs VWAP {_fmt(vwap.vwap)} (distance {_fmt(vwap.distance)})",
-        ("Underlying is below session VWAP" if vwap.valid and vwap.below_vwap
-         else "Underlying is not below session VWAP" if vwap.valid
+        f"reference {_fmt(vwap.reference_price if vwap.reference_price is not None else f.spot)} vs VWAP {_fmt(vwap.vwap)} (distance {_fmt(vwap.distance)})",
+        ("Reference price is below same-instrument session VWAP" if vwap.valid and vwap.below_vwap
+         else "Reference price is not below same-instrument session VWAP" if vwap.valid
          else f"VWAP unavailable: {vwap.reason}"),
     )
 

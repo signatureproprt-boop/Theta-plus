@@ -31,6 +31,8 @@ class MarketPanel(BaseModel):
     index: str = "NIFTY"
     spot: Optional[float] = None
     vwap: Optional[float] = None
+    vwap_source: str = "ohlcv"
+    vwap_reference_price: Optional[float] = None
     vwap_distance: Optional[float] = None
     vwap_distance_percent: Optional[float] = None
     above_vwap: bool = False

@@ -32,7 +32,7 @@ def test_ce_invalidation_on_vwap_cross():
     mem = _active(strong_ce_features())
     d = evaluate_and_apply(mem, ce_below_vwap_features(), CFG, T0 + timedelta(minutes=21))
     assert d.decision == "CE_INVALIDATED"
-    assert any("crossed below session VWAP" in r for r in d.reasons)
+    assert any("crossed below same-instrument session VWAP" in r for r in d.reasons)
     assert d.state == "INVALIDATED"
     assert mem.snapshot().state == SignalState.INVALIDATED
 
@@ -41,7 +41,7 @@ def test_pe_invalidation_on_vwap_cross():
     mem = _active(strong_pe_features())
     d = evaluate_and_apply(mem, pe_above_vwap_features(), CFG, T0 + timedelta(minutes=21))
     assert d.decision == "PE_INVALIDATED"
-    assert any("crossed above session VWAP" in r for r in d.reasons)
+    assert any("crossed above same-instrument session VWAP" in r for r in d.reasons)
     assert mem.snapshot().state == SignalState.INVALIDATED
 
 

@@ -3,6 +3,7 @@ live evaluation and (future) replay/backtest. Never two formulas."""
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
@@ -17,6 +18,7 @@ class Bar:
     low: float
     close: float
     volume: float
+    source: str = "ohlcv"
 
 
 def typical_price(bar: Bar) -> float:
@@ -26,16 +28,18 @@ def typical_price(bar: Bar) -> float:
 def compute_vwap(bars: Sequence[Bar]) -> Optional[float]:
     """Session VWAP = sum(typical * volume) / sum(volume).
 
-    Zero-volume fallback (documented): volume-weighting degenerates to the
-    mean of typical prices — deterministic, and better than returning None.
-    Returns None only when there are no bars at all.
+    Missing, invalid or zero-volume data is unavailable; never substitute a mean.
     """
     if not bars:
         return None
-    total_pv = sum(typical_price(b) * b.volume for b in bars)
+    if any(not all(math.isfinite(v) for v in (b.high, b.low, b.close, b.volume))
+           or b.volume < 0 or b.low <= 0 or b.high < b.low or not b.low <= b.close <= b.high
+           for b in bars):
+        return None
     total_volume = sum(b.volume for b in bars)
     if total_volume <= 0:
-        return round(sum(typical_price(b) for b in bars) / len(bars), 4)
+        return None
+    total_pv = sum(typical_price(b) * b.volume for b in bars)
     return round(total_pv / total_volume, 4)
 
 
@@ -47,11 +51,13 @@ def vwap_features(spot: float, bars: Sequence[Bar]) -> VwapFeatures:
     """
     vwap = compute_vwap(bars)
     if vwap is None:
-        return VwapFeatures(valid=False, reason="VWAP unavailable: no session bars")
+        return VwapFeatures(valid=False, reason="VWAP unavailable: missing/invalid bars or no traded volume")
     distance = round(spot - vwap, 4)
     distance_percent = round(distance / vwap * 100.0, 4) if vwap != 0 else None
     return VwapFeatures(
         vwap=vwap,
+        source=bars[-1].source,
+        reference_price=spot,
         distance=distance,
         distance_percent=distance_percent,
         above_vwap=spot > vwap,

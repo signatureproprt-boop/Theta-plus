@@ -103,8 +103,8 @@ def invalidation_reason(features: MarketFeatures, config, state: SignalStateSnap
     if side == "CE":
         if inv.vwap_cross and features.vwap.valid and features.vwap.below_vwap:
             return (
-                f"spot crossed below session VWAP "
-                f"(spot {features.spot:.2f}, VWAP {features.vwap.vwap:.2f})"
+                f"reference price crossed below same-instrument session VWAP "
+                f"(reference {features.vwap.reference_price if features.vwap.reference_price is not None else features.spot:.2f}, VWAP {features.vwap.vwap:.2f})"
             )
         if inv.pcr_reversal and state.signal_pcr is not None and features.pcr.total_pcr is not None:
             drop = state.signal_pcr - features.pcr.total_pcr
@@ -116,8 +116,8 @@ def invalidation_reason(features: MarketFeatures, config, state: SignalStateSnap
     else:
         if inv.vwap_cross and features.vwap.valid and features.vwap.above_vwap:
             return (
-                f"spot crossed above session VWAP "
-                f"(spot {features.spot:.2f}, VWAP {features.vwap.vwap:.2f})"
+                f"reference price crossed above same-instrument session VWAP "
+                f"(reference {features.vwap.reference_price if features.vwap.reference_price is not None else features.spot:.2f}, VWAP {features.vwap.vwap:.2f})"
             )
         if inv.pcr_reversal and state.signal_pcr is not None and features.pcr.total_pcr is not None:
             rise = features.pcr.total_pcr - state.signal_pcr
