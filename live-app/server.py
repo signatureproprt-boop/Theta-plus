@@ -160,7 +160,7 @@ def create_app(db_path=None):
         return {'version':VERSION,'dhan_configured':provider.configured,'provider_error':last_error,
                 'client_id_configured':bool(credential_source.client_id),
                 'auth_mode':'public' if public_workspace else 'workspace_key',
-                'token_screen_enabled':bool(credential_source.secret_name) and all(admin_config()),
+                'token_screen_enabled':bool(credential_source.secret_name) and admin_config(),
                 'credential_check':(store.rows('credential_status',1) or [{}])[0].get('data'),
                 'request_refresh':os.environ.get('THETA_REQUEST_REFRESH')=='true' and session_open(datetime.now(timezone.utc)),
                 'execution':'NO_BROKER_EXECUTION','strategy_validation':'UNVALIDATED_RESEARCH',
@@ -175,8 +175,12 @@ def create_app(db_path=None):
 
     @app.get('/api/admin/config')
     def google_admin_config():
-        client,emails=admin_config()
-        return {'enabled':bool(client and emails), 'client_id':client if emails else None}
+        return {'enabled':admin_config(), 'method':'admin_password'}
+
+    @app.post('/api/admin/check')
+    def check_admin_password(request:Request):
+        require_admin(request)
+        return {'authorised':True}
 
     @app.post('/api/dhan/token')
     async def rotate_dhan_token(payload:DhanTokenInput,request:Request):

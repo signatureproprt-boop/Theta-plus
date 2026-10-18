@@ -5,10 +5,6 @@ set -euo pipefail
 project=theta-pluse
 region=asia-south1
 service=theta-plus
-read -r -p 'Google Web OAuth Client ID (.apps.googleusercontent.com): ' web_client </dev/tty
-read -r -p 'Authorised Google admin email: ' admin_email </dev/tty
-[[ $web_client =~ ^[a-zA-Z0-9.-]+\.apps\.googleusercontent\.com$ ]] || { echo 'Invalid Google Web Client ID'; exit 1; }
-[[ $admin_email =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]] || { echo 'Invalid admin email'; exit 1; }
 work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT
 gcloud run services describe "$service" --project="$project" --region="$region" --format=json > "$work/service.json"
@@ -34,6 +30,25 @@ gcloud secrets describe "$secret" --project="$project" >/dev/null
 for role in roles/secretmanager.secretAccessor roles/secretmanager.secretVersionAdder; do
   gcloud secrets add-iam-policy-binding "$secret" --project="$project" --member="serviceAccount:$account" --role="$role" >/dev/null
 done
+# The password is entered only in the terminal; only its salted hash is saved.
+python3 - "$work/admin-hash" <<'PYHASH'
+import getpass,hashlib,secrets,sys
+from pathlib import Path
+password=getpass.getpass('Choose token-admin password (minimum 12 characters): ')
+assert 12<=len(password)<=512 and password.isascii() and all(32<=ord(c)<127 for c in password),'Use 12–512 printable ASCII characters'
+assert password==getpass.getpass('Repeat admin password: '),'Passwords do not match'
+salt=secrets.token_hex(32)
+digest=hashlib.pbkdf2_hmac('sha256',password.encode(),bytes.fromhex(salt),600000).hex()
+Path(sys.argv[1]).write_text(f'pbkdf2_sha256$600000${salt}${digest}')
+PYHASH
+chmod 600 "$work/admin-hash"
+admin_secret=theta-token-admin-password-hash
+if ! gcloud secrets describe "$admin_secret" --project="$project" >/dev/null 2>&1; then
+  gcloud secrets create "$admin_secret" --project="$project" --replication-policy=automatic >/dev/null
+fi
+admin_version=$(gcloud secrets versions add "$admin_secret" --project="$project" --data-file="$work/admin-hash" --format='value(name)')
+gcloud secrets add-iam-policy-binding "$admin_secret" --project="$project" --member="serviceAccount:$account" --role=roles/secretmanager.secretAccessor >/dev/null
 gcloud run services update "$service" --project="$project" --region="$region" \
-  --update-env-vars="^|^THETA_GOOGLE_CLIENT_ID=$web_client|THETA_ADMIN_EMAILS=$admin_email|THETA_DHAN_TOKEN_SECRET=$secret" --quiet
-echo 'Admin configuration saved. Permanent Dhan Client ID unchanged. Deploy the token-admin release next.'
+  --update-env-vars="THETA_DHAN_TOKEN_SECRET=$secret" \
+  --update-secrets="THETA_TOKEN_ADMIN_HASH=$admin_secret:${admin_version##*/}" --quiet
+echo 'Token admin configured. Dhan Client ID unchanged. Deploy the token-admin release next.'
