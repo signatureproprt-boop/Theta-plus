@@ -17,6 +17,7 @@ import asyncio
 import hashlib
 import os
 from collections import deque
+from dataclasses import asdict
 from datetime import datetime
 from typing import Optional
 
@@ -29,6 +30,7 @@ from execution.adapter import (
 )
 from execution.gate import ExecutionFlags, can_execute_order
 from execution.instruments import InstrumentMap
+from execution.journal import ExecutionJournal
 from execution.reconciliation import PositionReconciliationService
 from execution.risk_engine import RiskEngine, RiskState
 from lib.config import AppConfig
@@ -81,6 +83,7 @@ class ExecutionService:
         config: AppConfig,
         adapter: Optional[ExecutionAdapter] = None,
         instrument_map: Optional[InstrumentMap] = None,
+        journal: Optional[ExecutionJournal] = None,
     ) -> None:
         self.config = config
         self.adapter: ExecutionAdapter = adapter or MockExecutionAdapter(is_configured=False)
@@ -93,6 +96,39 @@ class ExecutionService:
         self.log: deque[ExecutionLogEntry] = deque(maxlen=500)
         self.last_block_reason = ""
         self.kill_switch = _env_flag("SYSTEM_KILL_SWITCH")
+        self._risk_day = None
+        path = os.environ.get("EXECUTION_JOURNAL_PATH", "")
+        self.journal = journal or ExecutionJournal(path or ":memory:")
+        self._journal_namespace = hashlib.sha256(
+            (self.adapter.name + ":" + os.environ.get("DHAN_CLIENT_ID", "")).encode()
+        ).hexdigest()
+        saved = self.journal.load()
+        if saved is not None:
+            if saved.get("namespace") != self._journal_namespace:
+                self.journal.close()
+                raise ValueError("Execution journal belongs to another broker/account namespace")
+            if saved.get("schema") != 1:
+                raise ValueError("Unsupported execution journal schema")
+            self.orders = {k: OrderRecord.model_validate(v) for k, v in saved["orders"].items()}
+            self.risk_state = RiskState(**saved["risk"])
+            self._risk_day = saved.get("risk_day")
+            self.kill_switch = self.kill_switch or saved.get("kill_switch", False)
+            self._refresh_exposure()
+            self.reconciler.mark_pending("restored journal; broker reconciliation required")
+
+    def _persist(self):
+        try:
+            self.journal.save({"schema": 1, "namespace": self._journal_namespace, "orders": {
+                k: v.model_dump(mode="json") for k, v in self.orders.items()},
+                "risk": asdict(self.risk_state), "risk_day": self._risk_day,
+                "kill_switch": self.kill_switch})
+        except Exception:
+            self.kill_switch = True
+            self.reconciler.mark_pending("journal write failed; execution blocked")
+            raise
+
+    def close(self):
+        self.journal.close()
 
     # --- flags -------------------------------------------------------------
     @property
@@ -100,7 +136,8 @@ class ExecutionService:
         """Safe defaults unless the operator set the env switches server-side."""
         return ExecutionFlags(
             mode=self.config.system_mode,
-            live_execution_enabled=self.config.live_execution_enabled and _env_flag("LIVE_EXECUTION_ENABLED"),
+            live_execution_enabled=(self.config.live_execution_enabled and _env_flag("LIVE_EXECUTION_ENABLED")
+                                    and (self.adapter.name != "dhan" or self.journal.durable)),
             live_execution_armed=self.config.live_execution_armed and _env_flag("LIVE_EXECUTION_ARMED"),
             kill_switch=self.kill_switch,
             control_enabled=False,  # no auth system => no UI/API control exists (§46)
@@ -109,6 +146,7 @@ class ExecutionService:
     def engage_kill_switch(self) -> None:
         """Server-side only: stops all new live orders immediately."""
         self.kill_switch = True
+        self._persist()
 
     # --- logging -----------------------------------------------------------
     def _log(self, event: str, **fields) -> ExecutionLogEntry:
@@ -145,6 +183,13 @@ class ExecutionService:
         reference_price: Optional[float] = None,
     ) -> ExecutionDecision:
         now = to_ist(now or datetime.now(IST))
+        day = now.date().isoformat()
+        if self._risk_day is not None and self._risk_day != day:
+            self.risk_state.trades_today = 0
+            self.risk_state.realized_pnl_today = 0.0
+            self.risk_state.locked = False
+            self.risk_state.lock_reason = ""
+        self._risk_day = day
         coid = client_order_id_for(signal_id)
         side = strike = ltp = ref = None
         if decision is not None:
@@ -205,7 +250,7 @@ class ExecutionService:
             client_order_id=order.client_order_id, signal_id=order.signal_id,
             status=ORDER_REQUESTED, mode=MODE_LIVE, security_id=order.security_id,
             exchange_segment=order.exchange_segment, transaction_type=order.transaction_type,
-            order_type=order.order_type, requested_quantity=order.quantity,
+            order_type=order.order_type, product_type=order.product_type, requested_quantity=order.quantity,
             remaining_quantity=order.quantity, requested_price=order.price,
             created_at=now, updated_at=now, reconciliation_state=self.reconciler.state,
         )
@@ -214,6 +259,7 @@ class ExecutionService:
         self.orders[order.client_order_id] = record
         self._refresh_exposure()
         self.risk_state.trades_today += 1
+        self._persist()  # committed before any broker call
 
         try:
             ack = await self.adapter.submit_order(order)
@@ -233,7 +279,7 @@ class ExecutionService:
                 record = self._apply_broker_state(record, state)
             return record
         except ExecutionError as exc:
-            record = self._update(record, status=ORDER_REJECTED, error_code="ADAPTER_ERROR",
+            record = self._update(record, status=ORDER_REJECTED, broker_confirmed=True, error_code="ADAPTER_ERROR",
                                   error_message=str(exc))
             self._log("ORDER_REJECTED", signal_id=order.signal_id,
                       client_order_id=order.client_order_id, mode=MODE_LIVE,
@@ -266,7 +312,8 @@ class ExecutionService:
         """
         self.risk_state.open_positions = sum(
             1 for order in self.orders.values()
-            if order.filled_quantity > 0 or order.status not in (ORDER_REJECTED, ORDER_CANCELLED)
+            if order.filled_quantity > 0 or not order.broker_confirmed
+            or order.status not in (ORDER_REJECTED, ORDER_CANCELLED)
         )
 
     # --- lifecycle ---------------------------------------------------------
@@ -274,6 +321,7 @@ class ExecutionService:
         new = record.model_copy(update={**fields, "updated_at": datetime.now(IST)})
         self.orders[new.client_order_id] = new
         self._refresh_exposure()
+        self._persist()
         return new
 
     def _apply_broker_state(self, record: OrderRecord, state: BrokerOrderState) -> OrderRecord:
@@ -283,7 +331,7 @@ class ExecutionService:
         if status == ORDER_FILLED and filled < record.requested_quantity and filled > 0:
             status = ORDER_PARTIALLY_FILLED  # never treat a partial as full
         record = self._update(
-            record, status=status, broker_order_id=state.broker_order_id or record.broker_order_id,
+            record, status=status, broker_confirmed=True, broker_order_id=state.broker_order_id or record.broker_order_id,
             broker_status=state.broker_status, filled_quantity=filled,
             remaining_quantity=remaining, average_fill_price=state.average_traded_price,
             error_code=state.error_code, error_message=state.error_message,
@@ -323,6 +371,8 @@ class ExecutionService:
                       block_reason="MAX_DAILY_LOSS",
                       message=f"realized loss {loss} exceeded limit {self.config.risk_max_daily_loss}")
 
+        self._persist()
+
     # --- exit safety (§40/§41) --------------------------------------------
     async def can_exit(self, security_id: str) -> tuple[bool, str]:
         """An exit needs a broker-CONFIRMED non-zero position and clean reconciliation."""
@@ -344,11 +394,21 @@ class ExecutionService:
             self._log("RECONCILIATION", reconciliation_state=RECON_PENDING,
                       message="broker not configured")
             return RECON_PENDING
-        internal_open = sum(
-            1 for r in self.orders.values()
-            if r.status in (ORDER_ACKNOWLEDGED, ORDER_PARTIALLY_FILLED, ORDER_FILLED)
-        )
-        report = await self.reconciler.reconcile(internal_open)
+        uncertain = (ORDER_REQUESTED, ORDER_SUBMITTED, ORDER_ACKNOWLEDGED,
+                     ORDER_PARTIALLY_FILLED, ORDER_UNKNOWN)
+        for key, record in list(self.orders.items()):
+            if record.status in uncertain or not record.broker_confirmed:
+                await self.refresh_order(key)
+        if any(r.status in uncertain or not r.broker_confirmed for r in self.orders.values()):
+            self.reconciler.mark_pending("pending/unknown orders require resolution; never resubmit")
+            return RECON_PENDING
+        expected = {}
+        for order in self.orders.values():
+            if order.filled_quantity:
+                key = (order.exchange_segment, order.security_id, order.product_type)
+                expected[key] = expected.get(key, 0) + order.filled_quantity * (1 if order.transaction_type == "BUY" else -1)
+        expected = {key: qty for key, qty in expected.items() if qty}
+        report = await self.reconciler.reconcile(len(expected), expected_positions=expected)
         self._log("RECONCILIATION", reconciliation_state=report.state, message=report.detail)
         return report.state
 
