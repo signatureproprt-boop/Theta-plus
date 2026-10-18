@@ -1,3 +1,7 @@
+## Complete Dhan data collection
+
+See [COLLECTION.md](COLLECTION.md) for the new catalogue, durable plans, Admin controls, bounded samples, runner and validation limits.
+
 # Theta+ — runnable options research application
 
 ## Historical data audit screen (v11)

@@ -15,6 +15,47 @@ class CloudStore:
         self.bucket = (client or storage.Client()).bucket(bucket_name)
 
     @staticmethod
+    def document_key(name):
+        if not name or any(p in ('','.','..') for p in name.split('/')) or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-./' for c in name):
+            raise ValueError('Invalid document name')
+        return 'collection/'+name+'.json'
+
+    def document(self, name):
+        # Mutable manifests must bypass the immutable-record cache. Pin reads to
+        # the generation obtained by reload, otherwise CAS could pair old/new bytes.
+        key=self.document_key(name)
+        for _ in range(3):
+            blob=self.bucket.blob(key)
+            try:
+                blob.reload(timeout=30)
+                generation=int(blob.generation)
+                return json.loads(blob.download_as_text(if_generation_match=generation,timeout=30)),generation
+            except NotFound:return None,0
+            except PreconditionFailed:continue
+        raise RuntimeError('Concurrent document update; retry request')
+
+    def put_document(self, name, payload, version):
+        try:
+            self.bucket.blob(self.document_key(name)).upload_from_string(json.dumps(payload,allow_nan=False),
+                content_type='application/json',if_generation_match=version,timeout=30)
+            return True
+        except PreconditionFailed:return False
+
+    def document_names(self, prefix, after='', limit=100):
+        root='collection/'
+        args={'prefix':root+prefix,'max_results':limit+1 if after else limit}
+        if after:args['start_offset']=root+after+'.json'
+        return [b.name[len(root):-5] for b in self.bucket.list_blobs(**args)
+                if b.name.endswith('.json') and b.name[len(root):-5]>after][:limit]
+
+    def put_catalogue_source(self, sha, source):
+        if len(sha)!=64 or any(c not in '0123456789abcdef' for c in sha):raise ValueError('Invalid checksum')
+        try:
+            self.bucket.blob(f'collection/catalogue/{sha}/source.csv').upload_from_filename(
+                str(source),content_type='text/csv',if_generation_match=0,timeout=90)
+        except PreconditionFailed:pass
+
+    @staticmethod
     def key(kind, record_id):
         if not kind.replace('_', '').isalnum():
             raise ValueError('Invalid record kind')

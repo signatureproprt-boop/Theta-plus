@@ -1,6 +1,7 @@
 """Theta Plus data foundation. Legacy trading analysis has been removed."""
 from __future__ import annotations
 import os,secrets
+import asyncio
 from pathlib import Path
 from datetime import datetime,timezone,date
 from fastapi import FastAPI,HTTPException,Request
@@ -17,6 +18,7 @@ from admin_auth import admin_config,require_admin
 from token_check import check_token
 from research_audit import audit_historical
 from dhan_data import fetch_history,fetch_chain,verify_record
+from collection import Collector,CollectionPlan
 ROOT=Path(__file__).parent
 class DhanTokenInput(Model):
     token: str = Field(min_length=20,max_length=4096)
@@ -55,6 +57,81 @@ def create_app(db_path=None):
     board=MarketBoard(provider,store)
     app=FastAPI(title='Theta Plus Data Foundation',version=VERSION,docs_url=None,redoc_url=None,openapi_url=None)
     app.state.store=store
+    collector=Collector(provider,store)
+    app.state.collector=collector
+
+    @app.post('/api/collection/profile/check')
+    async def collection_profile(request:Request):
+        require_admin(request)
+        try:result=await check_token(credential_source.token(),credential_source.client_id)
+        except CredentialError:raise HTTPException(503,'Dhan credentials unavailable') from None
+        result['checked_at']=datetime.now(timezone.utc).isoformat()
+        store.add('credential_status',result)
+        return result
+
+    @app.get('/api/collection/catalogue')
+    def collection_catalogue():
+        cat=collector.catalogue()
+        return {k:v for k,v in (cat or {}).items() if k!='pages'}
+
+    @app.get('/api/collection/catalogue/page')
+    def collection_catalogue_page(page:int=0):
+        return collector.catalogue_page(page)
+
+    @app.post('/api/collection/catalogue/refresh')
+    async def collection_catalogue_refresh(request:Request):
+        require_admin(request)
+        try:
+            cat=await collector.refresh_catalogue()
+            return {k:v for k,v in cat.items() if k!='pages'}
+        except (ValueError,UnicodeError):raise HTTPException(502,'Catalogue format invalid; previous catalogue retained') from None
+        except Exception as exc:
+            if isinstance(exc,HTTPException):raise
+            raise HTTPException(502,'Catalogue refresh failed; previous catalogue retained') from None
+
+    @app.get('/api/collection/jobs')
+    def collection_jobs(after:str=''):
+        if after and (not after.startswith('jobs/') or len(after)!=37):raise HTTPException(422,'Invalid cursor')
+        return collector.jobs(after)
+
+    @app.post('/api/collection/jobs')
+    async def collection_create(payload:CollectionPlan,request:Request):
+        require_admin(request)
+        return await asyncio.to_thread(collector.create,payload)
+
+    @app.get('/api/collection/jobs/{jid}')
+    def collection_job(jid:str):
+        return collector.summary(collector.get_job(jid))
+
+    @app.post('/api/collection/jobs/{jid}/run')
+    async def collection_run(jid:str,request:Request):
+        require_admin(request)
+        return await collector.run(jid)
+
+    @app.post('/api/collection/jobs/{jid}/{action}')
+    def collection_control(jid:str,action:str,request:Request):
+        require_admin(request)
+        return collector.control(jid,action)
+
+    @app.get('/api/collection/jobs/{jid}/results')
+    def collection_results(jid:str,after:str=''):
+        return collector.results(jid,after)
+
+    @app.post('/api/collection/retry')
+    async def collection_retry(payload:dict,request:Request):
+        require_admin(request)
+        jid=payload.get('job_id');key=payload.get('key')
+        if not isinstance(jid,str) or not isinstance(key,str):raise HTTPException(422,'Choose a result to retry')
+        return await asyncio.to_thread(collector.retry,jid,key)
+
+    @app.get('/api/collection/export/{key:path}')
+    def collection_export(key:str):
+        import re
+        if not re.fullmatch(r'(responses/[a-f0-9]{64}|candles/[a-f0-9]{64}/[0-9]{4}-[0-9]{2}-[0-9]{2})',key):
+            raise HTTPException(422,'Invalid export key')
+        result=store.document(key)[0]
+        if result is None:raise HTTPException(404,'Data not found')
+        return result
 
     @app.get('/api/status')
     def status():

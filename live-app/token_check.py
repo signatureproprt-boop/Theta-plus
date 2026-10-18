@@ -25,6 +25,7 @@ async def check_token(token, client_id):
             return str(value)[:100] if isinstance(value, (str, int, float)) else None
         return {'status': 'AUTHENTICATED', 'token_validity_reported': short('tokenValidity'),
                 'data_plan': short('dataPlan'), 'data_validity_reported': short('dataValidity'),
+                'active_segments': short('activeSegment'),
                 'market_data_verified': False}
     except (httpx.HTTPError, ValueError):
         raise HTTPException(502, 'Dhan connection check failed; existing token was not changed') from None
