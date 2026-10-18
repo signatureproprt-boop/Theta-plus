@@ -22,6 +22,8 @@ from market_board import MarketBoard
 from live_feed import relay
 from engine import bars5, chart_evidence, timeframe_trend, option_evidence, decision, size_plan, replay, VERSION, session_open, IST
 from credentials import DhanCredentials,CredentialError
+from admin_auth import admin_config, require_admin
+from token_check import check_token
 from research_audit import audit_historical
 from dhan_data import fetch_history,fetch_chain,verify_record
 
@@ -158,7 +160,8 @@ def create_app(db_path=None):
         return {'version':VERSION,'dhan_configured':provider.configured,'provider_error':last_error,
                 'client_id_configured':bool(credential_source.client_id),
                 'auth_mode':'public' if public_workspace else 'workspace_key',
-                'token_screen_enabled':not public_workspace and bool(credential_source.secret_name),
+                'token_screen_enabled':bool(credential_source.secret_name) and all(admin_config()),
+                'credential_check':(store.rows('credential_status',1) or [{}])[0].get('data'),
                 'request_refresh':os.environ.get('THETA_REQUEST_REFRESH')=='true' and session_open(datetime.now(timezone.utc)),
                 'execution':'NO_BROKER_EXECUTION','strategy_validation':'UNVALIDATED_RESEARCH',
                 'context_sources':'Timestamped user import; automatic global/FII feeds not connected',
@@ -170,12 +173,21 @@ def create_app(db_path=None):
         except ProviderError as exc:raise HTTPException(503,str(exc)) from None
         return {'ok':True}
 
+    @app.get('/api/admin/config')
+    def google_admin_config():
+        client,emails=admin_config()
+        return {'enabled':bool(client and emails), 'client_id':client if emails else None}
+
     @app.post('/api/dhan/token')
-    def rotate_dhan_token(payload:DhanTokenInput):
-        if public_workspace:raise HTTPException(403,'Token changes require server-side administration in public mode')
+    async def rotate_dhan_token(payload:DhanTokenInput,request:Request):
+        require_admin(request)
+        if not credential_source.secret_name:raise HTTPException(503,'Token storage needs one-time Secret Manager setup')
+        result=await check_token(payload.token,credential_source.client_id)
         try:credential_source.update_token(payload.token)
         except CredentialError as exc:raise HTTPException(503,str(exc)) from None
-        return {'updated':True,'message':'Dhan token saved. Token is never returned.'}
+        result['checked_at']=datetime.now(timezone.utc).isoformat()
+        store.add('credential_status',result)
+        return {'updated':True,'message':'Token checked and saved. Market data must be verified separately.',**result}
 
     @app.post('/api/research/audit')
     async def audit_route(payload:AuditInput):
