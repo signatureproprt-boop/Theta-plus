@@ -416,3 +416,17 @@ def test_zero_assessed_plan_does_not_report_completed(setup):
     result=run(c,jid)
     assert result['state']=='no_work' and result['provider_calls']==0
     assert result['items_assessed']==0 and p.calls==[]
+
+
+def test_rolling_boundary_spillover_is_reported_not_merged(setup):
+    c,p,s=setup;job=c.get_job(plan(c))
+    item=instrument(instrument='OPTIDX',segment='NSE_FNO',expiry_flags=['MONTH'])
+    task=c.task(job,'rolling',item)
+    inside=candles(extra={k:[1] for k in ('strike','oi','iv','spot')})
+    outside=candles(day='2026-10-17',extra={k:[1] for k in ('strike','oi','iv','spot')})
+    row={k:inside[k]+outside[k] for k in inside}
+    response={'raw':{'data':{'ce':row,'pe':row}}}
+    result=c.persist_candles(task,response)
+    assert result['rows']==1 and result['outside_requested_dates']==1
+    assert len(row['timestamp'])==2
+    assert result['days_saved']==['2026-10-16']

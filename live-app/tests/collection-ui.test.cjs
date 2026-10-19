@@ -4,7 +4,7 @@ const vm=require('node:vm');
 const fs=require('node:fs');
 const path=require('node:path');
 
-function environment(runState='completed') {
+function environment(runState='completed',options={}) {
   const nodes=new Map(), events={}, windowEvents={}, calls=[];
   function element(id) {
     if (!nodes.has(id)) {
@@ -35,6 +35,10 @@ function environment(runState='completed') {
     Blob,URL, setTimeout, clearTimeout,fetch:async(url,opts={})=>{
       calls.push([url,opts]);
       let data={};
+      if(url==='/api/status' && options.statusPromise)await options.statusPromise;
+      if(url==='/api/dhan/collected?kind=dhan_chain' && options.chainPromise)await options.chainPromise;
+      if(url==='/api/dhan/collected?kind=dhan_history')data={dhan_history:options.history||[]};
+      if(url==='/api/dhan/collected?kind=dhan_chain')data={dhan_chain:[]};
       if(url==='/api/status')data={dhan_configured:false,token_screen_enabled:true};
       if(url==='/api/dhan/collected')data={};
       if(url==='/api/admin/check')data={authorised:true};
@@ -100,4 +104,21 @@ test('rejected request stops browser pump and retains review status',async()=>{
   await e.click('collection-resume');
   assert.equal(e.calls.filter(([url])=>url.endsWith('/run')).length,1);
   assert.match(e.element('collection-current').innerHTML,/request review/);
+});
+
+
+test('saved history renders while status and chains are still pending; export keeps storage kind',async()=>{
+  const pending=new Promise(()=>{});
+  const e=environment('completed',{statusPromise:pending,chainPromise:pending,history:[{id:123,kind:'expired_option',index:'nifty',side:'PUT',expiry_flag:'MONTH',expiry_code:1,rows:385,from:'2026-10-12',to_exclusive:'2026-10-13'}]});
+  await e.flush();
+  const html=e.element('page-saved').innerHTML;
+  assert.match(html,/nifty/);assert.match(html,/PUT/);assert.match(html,/MONTH/);
+  assert.match(html,/data-export="dhan_history\/123"/);
+  assert.doesNotMatch(html,/No saved Dhan records found/);
+});
+
+test('new saved page shows loading rather than claiming no records',()=>{
+  const e=environment('completed',{statusPromise:new Promise(()=>{}),chainPromise:new Promise(()=>{})});
+  assert.match(e.element('page-saved').innerHTML,/Loading saved records/);
+  assert.doesNotMatch(e.element('page-saved').innerHTML,/No saved Dhan records found/);
 });

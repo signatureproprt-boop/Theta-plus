@@ -52,3 +52,12 @@ def test_foundation_ui_and_identity(app):
     assert status['analysis_state']=='NOT_IMPLEMENTED' and status['saved_data']=='RETAINED'
     assert status['execution']=='NO_BROKER_EXECUTION'
     assert c.get('/api/archive/credential_status').status_code==404
+
+
+def test_saved_history_can_load_independently_of_chains(app):
+    s=app.state.store
+    s.add('dhan_history',{'metadata':{'kind':'index','index':'nifty','rows':1},'raw':{}})
+    s.add('dhan_chain',{'metadata':{'kind':'live_option_chain','index':'nifty'},'raw':{}})
+    c=TestClient(app)
+    assert set(c.get('/api/dhan/collected?kind=dhan_history').json())=={'dhan_history'}
+    assert c.get('/api/dhan/collected?kind=secret').status_code==422
