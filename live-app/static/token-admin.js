@@ -19,7 +19,7 @@
   window.thetaRestoreDhanAdmin=()=>{sync();if(credential)message('Admin unlocked. Collection can use the saved token; edit only when needed.');};
   window.thetaLiveStreamRequest=async(symbol,signal)=>{
     if(!credential)throw Error('Open Admin and Unlock Admin first, then return and Start live.');
-    return fetch('/api/research/live',{method:'POST',signal,headers:{'Content-Type':'application/json','X-Theta-Admin-Password':credential},body:JSON.stringify({symbol})});
+    return window.thetaApiFetch('/api/research/live',{method:'POST',signal,headers:{'Content-Type':'application/json','X-Theta-Admin-Password':credential},body:JSON.stringify({symbol})});
   };
   document.addEventListener('click',async event=>{
     const id=event.target.closest('button')?.id;
@@ -33,11 +33,12 @@
     if(id==='test-dhan-connection'){try{showResult(await adminCall('test',{}));}catch(error){message(error.message);}return;}
     if(id!=='admin-signin')return;
     try{
-      const input=node('token-admin-password');credential=input.value;input.value='';
-      const response=await fetch('/api/admin/check',{method:'POST',headers:{'Content-Type':'application/json','X-Theta-Admin-Password':credential},body:'{}'});
-      const result=await response.json();
-      if(!response.ok){credential='';sync();throw Error(result.detail||'Admin password check failed.');}
-      settings=await adminCall('settings',{});
+      const input=node('token-admin-password');const password=input.value;input.value='';credential='';settings=null;sync();
+      const response=await window.thetaApiFetch('/api/admin/check',{method:'POST',headers:{'Content-Type':'application/json','X-Theta-Admin-Password':password},body:'{}'});
+      if(response.status===403){credential='';sync();}
+      const result=await window.thetaReadResponse(response);
+      if(result.authorised!==true)throw Error('Admin verification unavailable. Retry later.');
+      credential=password;settings=await adminCall('settings',{});
       editing=!settings.token_saved;sync();
       message(settings.editable?'Admin unlocked. Saved token is used automatically. Choose Edit token only to replace it.':'Connection storage setup is pending.');
     }catch(error){message(error.message);}
@@ -48,16 +49,16 @@
   }
   async function adminCall(action,body){
     if(!credential)throw Error('Unlock Admin first.');
-    const response=await fetch('/api/admin/dhan/'+action,{method:'POST',headers:{'Content-Type':'application/json','X-Theta-Admin-Password':credential},body:JSON.stringify(body)});
-    const result=await response.json();
-    if(!response.ok){if(response.status===403){credential='';sync();}throw Error(typeof result.detail==='string'?result.detail:'Connection check failed.');}
+    const response=await window.thetaApiFetch('/api/admin/dhan/'+action,{method:'POST',headers:{'Content-Type':'application/json','X-Theta-Admin-Password':credential},body:JSON.stringify(body)});
+    if(response.status===403){credential='';sync();}
+    const result=await window.thetaReadResponse(response);
     return result;
   }
   window.thetaAdminRequest=async(path,body={})=>{
     if(!credential)throw Error('Open Admin and unlock with your password first.');
-    const response=await fetch('/api/'+path,{method:'POST',signal:AbortSignal.timeout(240000),headers:{'Content-Type':'application/json','X-Theta-Admin-Password':credential},body:JSON.stringify(body)});
-    const result=await response.json();
-    if(!response.ok){if(response.status===403){credential='';sync();}throw Error(typeof result.detail==='string'?result.detail:'Collection request failed. Check inputs and status.');}
+    const response=await window.thetaApiFetch('/api/'+path,{method:'POST',signal:AbortSignal.timeout(240000),headers:{'Content-Type':'application/json','X-Theta-Admin-Password':credential},body:JSON.stringify(body)});
+    if(response.status===403){credential='';sync();}
+    const result=await window.thetaReadResponse(response);
     return result;
   };
   window.thetaSaveDhanToken=async()=>{

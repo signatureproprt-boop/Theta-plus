@@ -1,10 +1,10 @@
 'use strict';
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let status=null,collected={},busy=false;
+let status=null,statusState="loading",collected={},busy=false;
 const savedStates={dhan_history:'loading',dhan_chain:'loading'};
 const labels={research:['Trading Room','Market research.'],options:['Options Analysis','Current expiry.'],quality:['Data Quality','Evidence before signals.'],risk:['Risk & Rules','Plan the risk.'],replay:['Replay / Backtest','Replay known observations.'],paper:['Paper Journal','Record the decision.'],home:['Home','Data first.'],sources:['Dhan data','Fetch source data.'],collect:['Collect all data','Your Dhan data library.'],saved:['Saved data','Your records are retained.'],admin:['Admin','Dhan connection.']};
-async function api(path,body){const response=await fetch('/api/'+path,{signal:AbortSignal.timeout(body===undefined?60000:240000),method:body===undefined?'GET':'POST',headers:body===undefined?{}:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});const payload=await response.json();if(!response.ok)throw Error(typeof payload.detail==='string'?payload.detail:'Request failed');return payload;}
+async function api(path,body){const response=await window.thetaApiFetch('/api/'+path,{signal:AbortSignal.timeout(body===undefined?60000:240000),method:body===undefined?'GET':'POST',headers:body===undefined?{}:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});const payload=await window.thetaReadResponse(response);if(!response.ok)throw Error(typeof payload.detail==='string'?payload.detail:'Request failed');return payload;}
 function error(e){$('#error').hidden=false;$('#error').textContent=e.message||String(e);}
 function toast(text){$('#toast').textContent=text;$('#toast').classList.add('show');setTimeout(()=>$('#toast').classList.remove('show'),4000);}
 function show(name){name=labels[name]?name:'research';$$('.page').forEach(n=>n.hidden=n.id!=='page-'+name);$$('nav button').forEach(n=>n.classList.toggle('active',n.dataset.page===name));$('#page-label').textContent=labels[name][0];$('#page-title').textContent=labels[name][1];window.thetaResearchShow?.(name);}
@@ -36,10 +36,10 @@ async function refreshSaved(){
   }));
 }
 async function load(){
-  if(busy)return;busy=true;$('#error').hidden=true;renderHome();renderSources();renderAdmin();
+  if(busy)return;busy=true;statusState='loading';$('#error').hidden=true;renderHome();renderSources();renderAdmin();
   await Promise.allSettled([
     refreshSaved(),
-    (async()=>{try{status=await api('status');$('#connection').textContent=status.dhan_configured?'Dhan configured':'Dhan not configured';renderAdmin();}catch(e){$('#connection').textContent='Connection status unavailable';error(e);}})()
+    (async()=>{try{status=await api('status');statusState='loaded';$('#connection').textContent=status.dhan_configured?'Dhan configured':'Dhan not configured';renderAdmin();}catch(e){statusState='error';$('#connection').textContent='Connection status unavailable';renderAdmin();error(e);}})()
   ]);
   busy=false;
 }
@@ -55,6 +55,7 @@ function renderAdmin(){
     <div id="token-admin-panel"><label class="field">Token admin password<input id="token-admin-password" type="password" autocomplete="current-password" maxlength="512"></label>
     <button class="button secondary" id="admin-signin" type="button">Unlock Admin</button><button class="button secondary" id="admin-signout" type="button">Lock Admin</button>
     <p id="admin-login-status" class="form-help">Unlock Admin to manage collection or edit the saved token.</p></div>
+    ${statusState!=='loaded'?'<p class="form-help" role="status">'+(statusState==='error'?'Connection status could not load. Retry Refresh status after the wait. Saved token has not been removed.':'Loading connection status…')+'</p>':''}
     ${status?.token_screen_enabled?`<div id="saved-token-summary" role="status">${saved?'Dhan token is saved securely. It stays saved when you close or refresh this page.':'No Dhan token is configured yet.'}</div>
     <p class="form-help">Dhan Web tokens have a 24-hour validity from generation. Use the saved token until its Dhan-reported expiry. Choose Edit token to replace it when needed. Dhan Client ID stays saved.</p>
     <button class="button secondary" id="edit-dhan-token" type="button" disabled>${saved?'Edit token':'Add token'}</button>
@@ -64,8 +65,8 @@ function renderAdmin(){
       <label class="field">New Dhan access token<input id="dhan-token" type="password" autocomplete="new-password" spellcheck="false" required minlength="20" maxlength="4096" aria-label="New Dhan access token" disabled></label>
       <button class="button secondary" id="toggle-token" type="button" disabled>Show token</button><button class="button" type="submit" id="save-token" disabled>Save & check</button>
       <button class="button secondary" id="cancel-token-edit" type="button" disabled>Cancel edit</button>
-    </form>`:`<p class="form-help">Admin password and secure token storage need one-time setup.</p>`}
-    <div id="token-check-status" class="form-help">${status?.credential_check?esc('Last check: '+status.credential_check.status+' · Token validity (Dhan): '+(status.credential_check.token_validity_reported||'Not reported')+' · Data plan: '+(status.credential_check.data_plan||'Not reported')):'No token check recorded. No expiry countdown is assumed.'}</div>
+    </form>`:(status===null?'<p class="form-help">Token settings are unavailable until connection status loads.</p>':`<p class="form-help">Admin password and secure token storage need one-time setup.</p>`)}
+    <div id="token-check-status" class="form-help">${status?.credential_check?esc('Last check: '+status.credential_check.status+' · Token validity (Dhan): '+(status.credential_check.token_validity_reported||'Not reported')+' · Data plan: '+(status.credential_check.data_plan||'Not reported')):(status===null?'Token check status is unavailable.':'No token check recorded. No expiry countdown is assumed.')}</div>
     <div id="admin-dhan-result" class="form-help" role="status"></div></div></article>`;
   window.thetaRestoreDhanAdmin?.();
 }

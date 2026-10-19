@@ -34,6 +34,7 @@ function environment(runState='completed',options={}) {
     location:{hash:'#collect'},AbortSignal:{timeout:()=>undefined},Intl,Date,console,
     Blob,URL, setInterval:()=>0,setTimeout, clearTimeout,fetch:async(url,opts={})=>{
       calls.push([url,opts]);
+      if(options.responses?.[url])return options.responses[url];
       let data={};
       if(url==='/api/status' && options.statusPromise)await options.statusPromise;
       if(url==='/api/dhan/collected?kind=dhan_chain' && options.chainPromise)await options.chainPromise;
@@ -52,10 +53,10 @@ function environment(runState='completed',options={}) {
       if(url.endsWith('/resume'))data={...job,state:'running',...(options.background?{runner:{mode:'cloud_run_job',state:'starting'}}:{})};
       if(url.endsWith('/run'))data={...job,state:runState,items_assessed:1,rows_saved:1};
       if(url==='/api/collection/jobs/'+job.id)data={...job};
-      return {ok:true,status:200,json:async()=>data};
+      return {ok:true,status:200,text:async()=>JSON.stringify(data),json:async()=>data};
     }};
   vm.createContext(context);
-  for(const file of ['app.js','token-admin.js','collection.js']) {
+  for(const file of ['api-response.js','app.js','token-admin.js','collection.js']) {
     vm.runInContext(fs.readFileSync(path.join(__dirname,'../static',file),'utf8'),context,{filename:file});
   }
   async function flush(){for(let i=0;i<8;i++)await new Promise(resolve=>setImmediate(resolve));}
@@ -177,4 +178,26 @@ test('save clears token entry, closes editor and keeps Admin unlocked after refr
   await e.click('refresh');
   assert.equal(e.element('dhan-token-form').hidden,true);
   assert.equal(e.element('edit-dhan-token').disabled,false);
+});
+
+test('plain-text rate limit does not claim token setup is missing or repeat requests',async()=>{
+  const e=environment('completed',{responses:{'/api/status':{ok:false,status:429,text:async()=> 'Rate exceeded.',headers:{get:()=> '60'}}}});await e.flush();
+  assert.match(e.element('error').textContent,/Wait 60 seconds/);
+  assert.match(e.element('page-admin').innerHTML,/Connection status could not load/);
+  assert.doesNotMatch(e.element('page-admin').innerHTML,/need one-time setup|No token check recorded/);
+  const before=e.calls.length;await e.click('refresh');assert.equal(e.calls.length,before);
+});
+test('non-JSON admin rejection cannot leave Admin authenticated',async()=>{
+  const e=environment('completed',{responses:{'/api/admin/check':{ok:false,status:502,text:async()=>'<html>proxy error</html>'}}});await e.flush();
+  e.element('token-admin-password').value='fixture-admin';await e.click('admin-signin');
+  assert.match(e.element('admin-login-status').textContent,/HTTP 502/);
+  await assert.rejects(e.context.window.thetaAdminRequest('research/paper/list'),/unlock/);
+  assert.equal(e.element('token-admin-password').value,'');
+});
+
+test('unknown authentication payload fails closed',async()=>{
+  const e=environment('completed',{responses:{'/api/admin/check':{ok:true,status:200,text:async()=> '{}'}}});await e.flush();
+  e.element('token-admin-password').value='fixture-admin';await e.click('admin-signin');
+  await assert.rejects(e.context.window.thetaAdminRequest('research/paper/list'),/unlock/);
+  assert.match(e.element('admin-login-status').textContent,/verification unavailable/);
 });
