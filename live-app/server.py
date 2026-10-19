@@ -20,6 +20,7 @@ from research_audit import audit_historical
 from dhan_data import fetch_history,fetch_chain,verify_record
 from collection import Collector,CollectionPlan
 from history_coverage import coverage_report
+from worker import launch_worker,worker_status
 ROOT=Path(__file__).parent
 class DhanTokenInput(Model):
     token: str = Field(min_length=20,max_length=4096)
@@ -112,7 +113,14 @@ def create_app(db_path=None):
     @app.post('/api/collection/jobs/{jid}/{action}')
     def collection_control(jid:str,action:str,request:Request):
         require_admin(request)
-        return collector.control(jid,action)
+        result=collector.control(jid,action)
+        if action=='resume' and result['state']=='running' and os.environ.get('THETA_COLLECTION_WORKER'):
+            result['runner']=launch_worker(store)
+        return result
+
+    @app.get('/api/collection/engine')
+    def collection_engine():
+        return {'sdk':provider.capabilities(),'worker':worker_status(store)}
 
     @app.get('/api/collection/jobs/{jid}/results')
     def collection_results(jid:str,after:str=''):
@@ -136,7 +144,7 @@ def create_app(db_path=None):
 
     @app.get('/api/status')
     def status():
-        return {'version':VERSION,'dhan_configured':provider.configured,
+        return {'version':VERSION,'dhan_configured':provider.configured,'data_sdk':provider.capabilities(),
             'auth_mode':'public' if public_workspace else 'workspace_key',
             'token_screen_enabled':bool(credential_source.pair_secret or credential_source.secret_name) and admin_config(),
             'credential_check':(store.rows('credential_status',1) or [{}])[0].get('data'),

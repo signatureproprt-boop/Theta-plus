@@ -126,3 +126,47 @@ claiming successful completion.
 - deploy/check-data.py checks the live version, recent saved coverage and the
   three index daily requests. It reports provider rejection as PENDING rather
   than declaring completion. It does not alter authentication or cloud settings.
+
+
+## Official DhanHQ-py setup (3.2.0)
+
+`dhanhq==2.3.0` is pinned with its transitive dependencies. The provider uses
+public SDK methods for daily/minute history, rolling expired options, expiry lists,
+option chains and LTP/OHLC/full quote snapshots. The adapter unwraps only the SDK
+envelope, preserving the original Dhan response and existing raw record format.
+Every request creates a fresh SDK context from the existing rotating credentials.
+SDK requests run outside the ASGI event loop, retain bounded timeouts, reject
+redirects, sanitize transport errors before SDK logging, and expose only market-data
+endpoints. Instrument master downloads retain the existing original-CSV/checksum path.
+
+Live, 20-depth and 200-depth capture now uses official SDK subscriptions and
+packet decoders. The 200-depth socket uses the SDK's root endpoint. Original
+binary frames remain stored even if a particular packet cannot be decoded.
+These are still bounded ten-second samples, not continuous historical order books.
+Foreign stock feeds require separate credentials/entitlements and are not enabled
+by installing this SDK. No trading/order/account mutation methods are exposed.
+
+### One-time deployment from the existing authenticated Cloud Shell
+
+Run `bash ~/theta-update-311/live-app/deploy/setup-sdk.sh` after fetching/checking
+out this release. It deploys the existing app with the usual verified rollout,
+then creates/updates the private `theta-plus-collector` Cloud Run Job from the
+serving image digest and existing service account, bucket and Dhan secret references.
+Only data configuration is copied to the worker, not the Admin password hash. It
+grants that existing service identity `roles/run.invoker` on that job only and
+adds `THETA_COLLECTION_WORKER` to the service. Existing service settings and data
+are retained. Worker CPU/memory is allocated only while executions run.
+
+After deployment, `/api/collection/engine` reports SDK version and worker state.
+An Admin-authorized Resume dispatches a Cloud Run execution with service identity;
+no Admin password is persisted or sent to the worker. The UI polls progress while
+open; closing it does not stop an already dispatched worker. Pause, quota, token,
+permission and rejected-request states remain durable stop conditions.
+
+The worker handles existing `running` plans under shared CAS leases, skips paused
+plans, paginates job discovery, and never creates or expands a user's plan. A
+bounded execution checkpoints and dispatches its successor for a long backfill.
+A stopped token-required plan needs an explicit Resume after updating the token.
+If the worker is not configured, the existing browser/terminal runner still works
+and is labelled accordingly. SDK/worker configuration is not proof of full historical
+coverage; inspect the collection ledger and coverage checks separately.

@@ -19,7 +19,7 @@ def main():
         start-=timedelta(days=1)
         if start.weekday()<5:days+=1
     health=request('/health-check')
-    if health.get('version')!='theta-foundation-3.1.3':
+    if health.get('version')!='theta-foundation-3.2.0':
         print('PENDING: live version is',health.get('version'));return 2
     print('LIVE VERSION VERIFIED:',health['version'],flush=True)
     report=request(f'/api/dhan/coverage?start={start}&end={today}')
@@ -34,9 +34,12 @@ def main():
     pending=expected-complete
     print('RECENT COVERAGE:', 'WEEKDAY GRID VERIFIED' if not pending else 'PENDING '+str(sorted(pending)),flush=True)
     print(report['calendar_validation'],report['options'],flush=True)
+    last_session=today-timedelta(days=1)
+    while last_session.weekday()>=5:last_session-=timedelta(days=1)
+    daily_end=last_session+timedelta(days=1)
     for index in ('nifty','banknifty','india_vix'):
         try:
-            result=request('/api/dhan/history',{'kind':'daily','index':index,'start':str(start),'end':str(today)})
+            result=request('/api/dhan/history',{'kind':'daily','index':index,'start':str(start),'end':str(daily_end)})
             if result.get('rows',0)>0 and result.get('quality',{}).get('status')=='ROWS_PRESENT':
                 print('DAILY',index,result['rows'],'rows saved',flush=True)
             else:

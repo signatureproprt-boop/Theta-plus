@@ -32,7 +32,7 @@ function environment(runState='completed',options={}) {
     addEventListener:(name,fn)=>(events[name]??=[]).push(fn),createElement:()=>({click(){}})
   },window:{addEventListener:(name,fn)=>(windowEvents[name]??=[]).push(fn)},
     location:{hash:'#collect'},AbortSignal:{timeout:()=>undefined},Intl,Date,console,
-    Blob,URL, setTimeout, clearTimeout,fetch:async(url,opts={})=>{
+    Blob,URL, setInterval:()=>0,setTimeout, clearTimeout,fetch:async(url,opts={})=>{
       calls.push([url,opts]);
       let data={};
       if(url==='/api/status' && options.statusPromise)await options.statusPromise;
@@ -43,10 +43,11 @@ function environment(runState='completed',options={}) {
       if(url==='/api/dhan/collected')data={};
       if(url==='/api/admin/check')data={authorised:true};
       if(url==='/api/admin/dhan/settings')data={client_id:'fixture',editable:true};
+      if(url==='/api/collection/engine')data={sdk:{version:'2.3.0'},worker:{configured:!!options.background}};
       if(url==='/api/collection/catalogue')data={rows:2,fetched_at:'now',review_reasons:{}};
       if(url==='/api/collection/jobs' && !opts.method)data={jobs:[],next_cursor:null};
       if(url==='/api/collection/jobs' && opts.method)data={...job};
-      if(url.endsWith('/resume'))data={...job,state:'running'};
+      if(url.endsWith('/resume'))data={...job,state:'running',...(options.background?{runner:{mode:'cloud_run_job',state:'starting'}}:{})};
       if(url.endsWith('/run'))data={...job,state:runState,items_assessed:1,rows_saved:1};
       if(url==='/api/collection/jobs/'+job.id)data={...job};
       return {ok:true,status:200,json:async()=>data};
@@ -121,4 +122,15 @@ test('new saved page shows loading rather than claiming no records',()=>{
   const e=environment('completed',{statusPromise:new Promise(()=>{}),chainPromise:new Promise(()=>{})});
   assert.match(e.element('page-saved').innerHTML,/Loading saved records/);
   assert.doesNotMatch(e.element('page-saved').innerHTML,/No saved Dhan records found/);
+});
+
+
+test('server worker Resume does not start a browser pump',async()=>{
+  const e=environment('running',{background:true});await e.flush();
+  e.element('token-admin-password').value='fixture-admin';await e.click('admin-signin');
+  const b=e.element('job-button');b.dataset.collectionJob=e.job.id;await e.click('job-button');
+  await e.click('collection-resume');
+  assert.equal(e.calls.filter(([url])=>url.endsWith('/run')).length,0);
+  assert.match(e.element('collection-feedback').textContent,/may close this page/);
+  assert.match(e.element('collection-engine').textContent,/DhanHQ-py 2.3.0/);
 });
