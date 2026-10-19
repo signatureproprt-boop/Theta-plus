@@ -19,7 +19,7 @@
   window.thetaRestoreDhanAdmin=()=>{sync();if(credential)message('Admin unlocked. Collection can use the saved token; edit only when needed.');};
   window.thetaLiveStreamRequest=async(symbol,signal)=>{
     if(!credential)throw Error('Open Admin and Unlock Admin first, then return and Start live.');
-    return window.thetaApiFetch('/api/research/live',{method:'POST',signal,headers:{'Content-Type':'application/json','X-Theta-Admin-Password':credential},body:JSON.stringify({symbol})});
+    return window.thetaApiFetch('/api/research/live',{method:'POST',signal,headers:{'Content-Type':'application/json','X-Theta-Admin-Password':credential},body:JSON.stringify({symbol,contract_id:window.thetaResearchSnapshot?.().selected?.security_id||''})});
   };
   document.addEventListener('click',async event=>{
     const id=event.target.closest('button')?.id;

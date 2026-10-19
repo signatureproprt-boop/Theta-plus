@@ -157,3 +157,34 @@ test('late session response cannot overwrite a newer contract or its setup check
   assert.equal(e.context.window.thetaResearchSnapshot().selected.security_id,'456');
   assert.ok(!e.element('page-research').innerHTML.includes('Trigger met'));
 });
+
+test('manual candle refresh works while socket is disconnected and does not start it',async()=>{
+  const e=environment('research');await e.flush();let calls=0;
+  e.context.window.thetaLiveIsActive=()=>false;
+  e.context.window.thetaAdminRequest=async(path)=>{assert.equal(path,'research/session');calls++;return {session_date:'2026-10-19',candles:[],expected_minutes:0,missing_minutes:0,freshness:{state:'MISSING'}};};
+  await e.context.window.thetaSessionRefresh();assert.equal(calls,0);
+  await e.element('research-session-refresh').onclick();assert.equal(calls,1);
+  assert.equal(e.element('research-session-refresh').disabled,false);
+});
+test('selected live observation updates separately, preserves risk assumptions and never promotes quote freshness',async()=>{
+  const e=environment('research',{chain:{expiry:contract.expiry,contracts:[contract]}});await e.flush();
+  e.context.window.thetaResearchPickContract(contract);await e.flush();
+  const form=e.element('research-risk');form.fields={entry:'102',stop:'88'};form.oninput({currentTarget:form});
+  e.context.window.thetaLiveIsActive=()=>true;
+  const row={...contract,role:'option',underlying:'nifty',ltp:111,bid:110,ask:112,trade_at:new Date().toISOString(),received_at:new Date().toISOString(),trade_state:'RECENT_TRADE'};
+  e.context.window.thetaResearchLiveBatch([row]);
+  assert.match(e.element('selected-live-observation').innerHTML,/Recent trade · live socket/);
+  assert.match(e.element('selected-live-observation').innerHTML,/111/);
+  assert.match(e.element('selected-live-observation').innerHTML,/quote time unverified/);
+  assert.equal(e.context.window.thetaResearchSnapshot().selected.freshness,'TIME_UNVERIFIED');
+  assert.equal(form.fields.entry,'102');assert.equal(form.fields.stop,'88');
+  e.context.window.thetaLiveIsActive=()=>false;e.context.window.thetaResearchLiveState();
+  assert.match(e.element('selected-live-observation').innerHTML,/Retained \/ stale/);
+  e.context.window.thetaResearchLiveReset();assert.match(e.element('selected-live-observation').innerHTML,/awaiting socket observation/);
+});
+test('mismatched option identity cannot populate the selected live observation',async()=>{
+  const e=environment('research',{chain:{expiry:contract.expiry,contracts:[contract]}});await e.flush();
+  e.context.window.thetaResearchPickContract(contract);await e.flush();
+  e.context.window.thetaResearchLiveBatch([{...contract,role:'option',underlying:'nifty',side:'PE',ltp:999}]);
+  assert.ok(!e.element('selected-live-observation').innerHTML.includes('999'));
+});

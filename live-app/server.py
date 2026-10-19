@@ -76,7 +76,7 @@ def create_app(db_path=None):
     async def research_live(payload:LiveInput,request:Request):
         require_admin(request)
         if not provider.configured:raise HTTPException(503,'Dhan credentials not configured')
-        return StreamingResponse(research_live_stream(provider,store,board,payload.symbol,request),
+        return StreamingResponse(research_live_stream(provider,store,board,payload.symbol,request,payload.contract_id),
             media_type='text/event-stream',headers={'X-Accel-Buffering':'no','Cache-Control':'no-store'})
 
     @app.post('/api/research/session')

@@ -163,3 +163,31 @@ def test_busy_stream_is_retryable_without_stealing_owner(tmp_path):
     values=asyncio.run(run())
     assert values[0]['state']=='STREAM_BUSY' and values[0]['retry_after_seconds']==5
     assert s.document('research/live-lease')[0]['owner']==owner
+
+
+def test_prepare_subscribes_displayed_window_and_pinned_exact_contract(tmp_path,monkeypatch):
+    from types import SimpleNamespace
+    s=Store(tmp_path/'window.db');expiry='2026-10-27'
+    pairs={};options={}
+    for i in range(21):
+        strike=22000+i*50;pairs[str(strike)]={}
+        for side,leg in [('CE','ce'),('PE','pe')]:
+            sid=str(strike*2+(side=='PE'))
+            pairs[str(strike)][leg]={'security_id':sid}
+            options[sid]={'security_id':sid,'expiry':expiry,'strike':strike,'side':side,'lot_size':65,'underlying':'nifty'}
+    record=s.add('dhan_chain',{'raw':{'data':{'oc':pairs,'last_price':22500}}})
+    async def catalog():pass
+    async def fetch(*args):return {'id':record,'expiry':expiry}
+    monkeypatch.setattr(live,'fetch_chain',fetch);monkeypatch.setattr(live,'now',at)
+    board=SimpleNamespace(catalog=catalog,instruments={'nifty':{'security_id':'13','segment':'IDX_I'}},options=options)
+    pinned=str(22000*2)
+    result=asyncio.run(live.prepare(board,None,s,'nifty',pinned))
+    legs=[r for r in result if r['role']=='option']
+    assert len(legs)==23  # displayed ATM +/-5 CE/PE plus pinned outside window
+    assert sum(r['security_id']==pinned for r in legs)==1
+    assert {r['strike'] for r in legs if r['security_id']!=pinned}==set(range(22250,22800,50))
+    # A valid ID on another underlying cannot be attached to this room.
+    options['999']={**options[pinned],'security_id':'999','underlying':'banknifty'}
+    assert not any(r['security_id']=='999' for r in asyncio.run(live.prepare(board,None,s,'nifty','999')))
+    options['999'].update(underlying='nifty',expiry='2026-10-15')
+    assert not any(r['security_id']=='999' for r in asyncio.run(live.prepare(board,None,s,'nifty','999')))
