@@ -23,6 +23,7 @@ from history_coverage import coverage_report
 from worker import launch_worker,worker_status
 from research import workspace, risk_plan, RiskInput, PaperNote, ReplayInput, replay_report, RULE_VERSION
 from live_research import stream as research_live_stream
+from session_chart import refresh_session
 from typing import Literal
 ROOT=Path(__file__).parent
 class DhanTokenInput(Model):
@@ -74,6 +75,13 @@ def create_app(db_path=None):
         if not provider.configured:raise HTTPException(503,'Dhan credentials not configured')
         return StreamingResponse(research_live_stream(provider,store,board,payload.symbol,request),
             media_type='text/event-stream',headers={'X-Accel-Buffering':'no','Cache-Control':'no-store'})
+
+    @app.post('/api/research/session')
+    async def research_session(payload:LiveInput,request:Request):
+        require_admin(request)
+        if not provider.configured:raise HTTPException(503,'Dhan credentials not configured')
+        try:return await refresh_session(provider,store,board,payload.symbol)
+        except ProviderError as exc:raise HTTPException(503,str(exc)) from None
 
     @app.get('/api/research/workspace')
     def research_workspace(symbol:str='nifty'):

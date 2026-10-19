@@ -35,7 +35,7 @@
       if(row.role==='underlying'&&row.key===symbol&&currentTrade(row)){
         const at=Date.parse(row.trade_at),old=points.at(-1);
         if(!old||at>old.at)points.push({at,price:row.ltp});else if(at===old.at)old.price=row.ltp;
-        points=points.slice(-300);
+        points=points.slice(-300);window.thetaResearchTick?.(row);
       }
     }
     if((data.ticks||[]).length){retries=0;text('Connected · received '+new Date(data.received_at).toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata'})+' IST');}
@@ -57,10 +57,11 @@
       text('Disconnected · reconnect attempt '+retries+'/5');render();await new Promise(resolve=>setTimeout(resolve,Math.min(30000,1000*2**retries)));
     }}
   }
+  window.thetaLiveIsActive=()=>active;
   window.thetaLiveStop=()=>{active=false;generation++;controller?.abort();text('Disconnected · last observations retained, not live');render();};
   window.thetaLiveMount=()=>{
     if(!node('research-live-start'))return;
-    node('research-live-start').onclick=()=>{if(active)return;if(typeof window.thetaLiveStreamRequest!=='function'){text('Open Admin and Unlock Admin first.');render();return;}symbol=node('research-symbol')?.value||'nifty';rows=new Map();points=[];retries=0;active=true;lastFrame=Date.now();text('Connecting…');render();connect(++generation);};
+    node('research-live-start').onclick=()=>{if(active)return;if(typeof window.thetaLiveStreamRequest!=='function'){text('Open Admin and Unlock Admin first.');render();return;}symbol=node('research-symbol')?.value||'nifty';rows=new Map();points=[];retries=0;active=true;window.thetaSessionRefresh?.();lastFrame=Date.now();text('Connecting…');render();connect(++generation);};
     node('research-live-stop').onclick=window.thetaLiveStop;render();
   };
   setInterval(()=>{if(active&&lastFrame&&Date.now()-lastFrame>(connected?15000:120000)){text('Feed stalled · reconnecting');stalled=true;lastFrame=Date.now();controller?.abort();}render();},2000);
