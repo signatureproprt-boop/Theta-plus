@@ -5,7 +5,7 @@ import asyncio
 from pathlib import Path
 from datetime import datetime,timezone,date
 from fastapi import FastAPI,HTTPException,Request
-from fastapi.responses import FileResponse,JSONResponse
+from fastapi.responses import FileResponse,JSONResponse,StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError,Field
 from models import Model
@@ -22,6 +22,8 @@ from collection import Collector,CollectionPlan
 from history_coverage import coverage_report
 from worker import launch_worker,worker_status
 from research import workspace, risk_plan, RiskInput, PaperNote, ReplayInput, replay_report, RULE_VERSION
+from live_research import stream as research_live_stream
+from typing import Literal
 ROOT=Path(__file__).parent
 class DhanTokenInput(Model):
     token: str = Field(min_length=20,max_length=4096)
@@ -32,6 +34,9 @@ class DhanConnectionInput(Model):
 
 class AuditInput(Model):
     day: date
+
+class LiveInput(Model):
+    symbol: Literal['nifty','banknifty']
 
 class DhanHistoryInput(Model):
     kind: str
@@ -62,6 +67,13 @@ def create_app(db_path=None):
     app.state.store=store
     collector=Collector(provider,store)
     app.state.collector=collector
+
+    @app.post('/api/research/live')
+    async def research_live(payload:LiveInput,request:Request):
+        require_admin(request)
+        if not provider.configured:raise HTTPException(503,'Dhan credentials not configured')
+        return StreamingResponse(research_live_stream(provider,store,board,payload.symbol,request),
+            media_type='text/event-stream',headers={'X-Accel-Buffering':'no','Cache-Control':'no-store'})
 
     @app.get('/api/research/workspace')
     def research_workspace(symbol:str='nifty'):

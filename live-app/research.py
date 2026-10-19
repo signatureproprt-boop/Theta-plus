@@ -357,6 +357,6 @@ def workspace(store,symbol,clock=None,options=None):
             'latest_candle':latest,'candle_freshness':freshness(latest['closed_at'],latest['received_at'],clock,90) if latest else {'state':'MISSING'},
             'chain':chain,'setups':[setup_rules(candles,clock,s) for s in ('opening_range','trend_pullback')],
             'availability':{'breadth':'NOT_CONNECTED','events':'NOT_CONNECTED','futures_vwap':'NOT_VERIFIED',
-                            'continuous_feed':'NOT_CONNECTED','iv_percentile':'HISTORY_UNVERIFIED','pcr_history':'CADENCE_UNVERIFIED'},
+                            'continuous_feed':'SEE_LIVE_PANEL_STATUS','iv_percentile':'HISTORY_UNVERIFIED','pcr_history':'CADENCE_UNVERIFIED'},
             'validation':{'rule_state':'UNVALIDATED','paper_trade_minimum':50,'multiple_regimes_required':True,
                           'option_backtest_ready':False,'live_orders':False}}

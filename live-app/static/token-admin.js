@@ -17,9 +17,13 @@
     if(client){if(settings?.client_id)client.value=settings.client_id;client.readOnly=!!settings?.client_id;client.disabled=!(unlocked && editing && !saving) || !!settings?.client_id;}
   }
   window.thetaRestoreDhanAdmin=()=>{sync();if(credential)message('Admin unlocked. Collection can use the saved token; edit only when needed.');};
+  window.thetaLiveStreamRequest=async(symbol,signal)=>{
+    if(!credential)throw Error('Open Admin and Unlock Admin first, then return and Start live.');
+    return fetch('/api/research/live',{method:'POST',signal,headers:{'Content-Type':'application/json','X-Theta-Admin-Password':credential},body:JSON.stringify({symbol})});
+  };
   document.addEventListener('click',async event=>{
     const id=event.target.closest('button')?.id;
-    if(id==='admin-signout'){credential='';clearCandidate();sync();message('Admin locked. Saved Dhan connection is retained.');return;}
+    if(id==='admin-signout'){window.thetaLiveStop?.();credential='';clearCandidate();sync();message('Admin locked. Saved Dhan connection is retained.');return;}
     if(id==='edit-dhan-token'){
       if(!credential){message('Unlock Admin first.');return;}
       editing=true;clearCandidate();sync();field()?.focus?.();return;

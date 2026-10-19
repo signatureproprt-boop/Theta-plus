@@ -26,7 +26,7 @@ test('options screen labels snapshot PCR and unverified history without polling 
 test('missing data still renders research chart and unavailable message',async()=>{
   const e=environment('research');await e.flush();
   assert.match(e.element('research-chart-readout').textContent,/No complete bars/);
-  assert.match(e.element('page-research').innerHTML,/No continuous feed connected/);
+  assert.match(e.element('page-research').innerHTML,/Saved-data freshness above/);
 });
 test('backend chain strings cannot inject markup',async()=>{
   const e=environment('options',{chain:{status:'<script>bad</script>',contracts:[]}});await e.flush();
@@ -40,6 +40,12 @@ test('risk and replay gates remain visible without fabricated metrics',async()=>
   e.context.window.thetaResearchShow('replay');
   assert.match(e.element('page-replay').innerHTML,/Underlying replay is not an option P&L backtest/);
   assert.match(e.element('page-replay').innerHTML,/Not available until execution data passes/);
+});
+test('changing research pages removes duplicate control IDs from the old page',async()=>{
+  const e=environment('options');await e.flush();assert.match(e.element('page-options').innerHTML,/research-symbol/);
+  e.context.window.thetaResearchShow('quality');
+  assert.equal(e.element('page-options').innerHTML,'');
+  assert.match(e.element('page-quality').innerHTML,/research-symbol/);
 });
 test('notes are explicit observations and Admin auth is required for writes',async()=>{
   const e=environment('paper');await e.flush();
