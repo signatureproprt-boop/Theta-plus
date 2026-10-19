@@ -50,7 +50,7 @@ async def refresh_session(provider,store,board,symbol,clock=None):
         raw={k:[] for k in ('timestamp','open','high','low','close','volume')};body=None
     else:
         body={'securityId':str(item['security_id']),'exchangeSegment':'IDX_I','instrument':'INDEX',
-              'interval':'1','oi':False,'fromDate':start.strftime('%Y-%m-%d %H:%M:%S'),'toDate':end.strftime('%Y-%m-%d %H:%M:%S')}
+              'interval':'1','oi':False,'fromDate':(start-timedelta(minutes=1)).strftime('%Y-%m-%d %H:%M:%S'),'toDate':end.strftime('%Y-%m-%d %H:%M:%S')}
         raw=await provider.post('charts/intraday',body)
         candle_count(raw)
     received=clock if fixed_clock else datetime.now(timezone.utc)
@@ -70,12 +70,12 @@ async def refresh_context(provider,store,board,symbol):
     index=board.instruments.get(symbol)
     key='research/warmup/'+symbol;old=await asyncio.to_thread(store.document,key)
     report={}
-    if index and (not old[0] or old[0].get('session_date')!=day.isoformat() or old[0].get('security_id')!=str(index['security_id'])):
+    if index and (not old[0] or old[0].get('request_version')!=2 or old[0].get('session_date')!=day.isoformat() or old[0].get('security_id')!=str(index['security_id'])):
         body={'securityId':str(index['security_id']),'exchangeSegment':'IDX_I','instrument':'INDEX','interval':'1','oi':False,
-              'fromDate':(start-timedelta(days=21)).strftime('%Y-%m-%d %H:%M:%S'),'toDate':start.strftime('%Y-%m-%d %H:%M:%S')}
+              'fromDate':(start-timedelta(days=21)).replace(hour=0,minute=0).strftime('%Y-%m-%d %H:%M:%S'),'toDate':start.strftime('%Y-%m-%d %H:%M:%S')}
         try:
             raw=await provider.post('charts/intraday',body);candle_count(raw)
-            record={'symbol':symbol,'security_id':str(index['security_id']),'session_date':day.isoformat(),'received_at':datetime.now(timezone.utc).isoformat(),'request':body,'raw':raw}
+            record={'symbol':symbol,'security_id':str(index['security_id']),'session_date':day.isoformat(),'request_version':2,'received_at':datetime.now(timezone.utc).isoformat(),'request':body,'raw':raw}
             await asyncio.to_thread(replace,store,key,lambda previous:record)
         except ProviderError as exc:report['warmup_error']=str(exc)
     future=board.instruments.get(symbol+'_future')
@@ -87,7 +87,7 @@ async def refresh_context(provider,store,board,symbol):
     end=min(local.replace(second=0,microsecond=0),start.replace(hour=15,minute=30))
     if day.weekday()>4 or end<=start:return {**report,'futures_vwap':{'state':'OUTSIDE_REGULAR_SESSION','value':None}}
     body={'securityId':str(future['security_id']),'exchangeSegment':'NSE_FNO','instrument':'FUTIDX','interval':'1','oi':True,
-          'fromDate':start.strftime('%Y-%m-%d %H:%M:%S'),'toDate':end.strftime('%Y-%m-%d %H:%M:%S')}
+          'fromDate':(start-timedelta(minutes=1)).strftime('%Y-%m-%d %H:%M:%S'),'toDate':end.strftime('%Y-%m-%d %H:%M:%S')}
     try:
         raw=await provider.post('charts/intraday',body);candle_count(raw)
         record={'symbol':symbol,'security_id':str(future['security_id']),'expiry':future['expiry'],'session_date':day.isoformat(),

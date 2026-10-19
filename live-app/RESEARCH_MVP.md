@@ -183,3 +183,14 @@ The new Admin-protected paper ledger records manual hypothetical buys and exits,
 Blocked collector requests now have a read-only diagnostic action under Data Quality. It checks the exact instrument against the current catalogue and probes only a recent seven-calendar-day daily and intraday window. DH-907 remains ambiguous (incorrect parameters or no data per official annexure): https://dhanhq.co/docs/v2/annexure/ . It cannot be marked complete or auto-skipped based on this code alone. Diagnostics preserve the original task, errors and checkpoint.
 
 Validation covers current-source supersession/replay visibility, momentum edge cases, VWAP gaps, protected ledger access, idempotency, costs, exact identities, explicit deviations, concurrent daily-risk limits and unchanged collection checkpoints. Production warm-up, futures context and paper flow still need post-deployment verification. Historical option execution P&L, external event/breadth feeds, walk-forward performance and 50 verified paper trades remain unestablished.
+
+
+### Production corrections 3.4.1
+
+3.4.0 production verification loaded 5,623 index minutes and populated 1H/15m bias and RSI/ADX. Exact option selection carried expiry, security ID, lot size and ask into risk planning. Protected paper ledger read succeeded with zero trades; no test trades or user financial assumptions were written. The after-hours stream was stopped after verification.
+
+Two observable source issues were found. Current-session response had 374/375 minutes and the opening range stayed incomplete. The request now starts one minute before 09:15, with strict regular-session filtering unchanged; genuine gaps are retained and their first eight exact times shown. Warm-up starts at midnight of its first day and exposes provider errors. This is a boundary-request correction, not proof that the vendor has every minute; corrected production coverage must be checked after deployment.
+
+Exact futures identities failed because real master SYMBOL_NAME values include expiry: NIFTY-Oct2026-FUT (48704) and BANKNIFTY-Oct2026-FUT (48699), expiry 2026-10-27 in the retrieved source. Resolve FUTIDX by exact UNDERLYING_SYMBOL plus exchange, instrument and segment, then choose the front non-expired expiry; no IDs are hardcoded. A regression fixture uses these actual vendor-shaped names and rejects wrong segments, other underlyings and expired contracts.
+
+The LCTMCI / IDX_I security ID 54 diagnostic matched one current master row. Its recent daily request returned DH-907 while its recent one-minute request returned 1,875 rows. The diagnostic conclusion now distinguishes this endpoint-specific result. Its original five-year daily request and historical checkpoint remain unresolved; no daily data was fabricated from intraday bars or marked complete.

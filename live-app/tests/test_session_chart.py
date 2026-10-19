@@ -43,7 +43,7 @@ def test_refresh_is_cached_bounded_and_keeps_collection_documents_unchanged(tmp_
         return first,second
     a,b=asyncio.run(run())
     assert len(calls)==1 and calls[0][0]=='charts/intraday'
-    assert calls[0][1]['fromDate']=='2026-10-19 09:15:00'
+    assert calls[0][1]['fromDate']=='2026-10-19 09:14:00'
     assert calls[0][1]['toDate']=='2026-10-19 09:18:00'
     assert a['received_at']==b['received_at']
     assert store.document('jobs/keep')[0]=={'state':'paused'}

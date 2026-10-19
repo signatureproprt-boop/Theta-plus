@@ -50,8 +50,13 @@ def parse_master(text,today):
                 options[sid]={'security_id':sid,'expiry':expiry.isoformat(),'strike':strike,'side':side,'lot_size':int(lot),'underlying':row['UNDERLYING_SYMBOL'].lower()}
             except (ValueError,KeyError):pass
         for key,label,group,wanted,kind,exch in WATCH:
-            if (symbol,inst,exchange)!=(wanted,kind,exch):continue
-            segment='IDX_I' if inst=='INDEX' and row['SEGMENT']=='I' else 'NSE_FNO' if inst=='FUTIDX' and exchange=='NSE' else 'MCX_COMM' if exchange=='MCX' and row['SEGMENT']=='M' else 'NSE_CURRENCY' if inst=='FUTCUR' and row['SEGMENT']=='C' else None
+            # Derivative SYMBOL_NAME includes its expiry (NIFTY-Oct2026-FUT).
+            # Resolve the exact underlying column, then choose front expiry;
+            # never strip suffixes or use a prefix that could select mini/micro.
+            base=(row.get('UNDERLYING_SYMBOL') or '').strip().upper() if kind=='FUTIDX' else symbol
+            if not base:base=symbol # Older masters/fixtures may use the plain exact name.
+            if (base,inst,exchange)!=(wanted,kind,exch):continue
+            segment='IDX_I' if inst=='INDEX' and row['SEGMENT']=='I' else 'NSE_FNO' if inst=='FUTIDX' and exchange=='NSE' and row['SEGMENT']=='D' else 'MCX_COMM' if exchange=='MCX' and row['SEGMENT']=='M' else 'NSE_CURRENCY' if inst=='FUTCUR' and row['SEGMENT']=='C' else None
             if not segment:continue
             item={'key':key,'label':label,'group':group,'security_id':sid,'segment':segment,
                   'expiry':expiry.isoformat() if expiry else None,'instrument':inst,
