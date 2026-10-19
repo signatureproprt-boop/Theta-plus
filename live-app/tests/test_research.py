@@ -184,3 +184,29 @@ def test_research_navigation_and_assets(client):
     assert client.get('/static/research.js').status_code==200
     assert client.get('/static/research.css').status_code==200
     assert client.get('/api/overview').status_code==410
+
+
+def test_observed_room_uses_only_nearest_known_obstacle_and_requires_valid_risk():
+    at=clock('2026-10-12T10:00:00+05:30')
+    start=int(clock('2026-10-12T09:15:00+05:30').timestamp())
+    rows=[{'timestamp':start,'open':100,'high':110,'low':90,'close':100,'volume':1},
+          {'timestamp':start+60,'open':100,'high':105,'low':99,'close':104,'volume':1}]
+    result=r.price_room(rows,at,'CE',100)
+    assert result['price']==110 and result['room_r']==1.5
+    assert r.price_room(rows,at,'CE',105) is None
+    assert r.price_room(rows,at,'CE',None) is None
+    # If price is already beyond all observed highs, do not invent unlimited room.
+    rows[-1]['close']=120;assert r.price_room(rows,at,'CE',100) is None
+
+
+def test_breadth_flats_do_not_count_as_put_participation():
+    out=r.setup_rules(bars(),clock(),'trend_pullback',breadth={'fraction_up':.1,'fraction_down':.1},context_fresh=True,room_r=2,
+                      indicator_view={'60':{'bias':'BEARISH'},'15':{'bias':'BEARISH'}})
+    assert 'PARTICIPATION_WEAK' in out['reason_codes']
+
+
+def test_future_obstacle_cannot_change_price_room():
+    at=clock('2026-10-12T10:00:00+05:30');start=int(clock('2026-10-12T09:15:00+05:30').timestamp())
+    rows=[{'timestamp':start,'high':110,'low':90,'close':100}, {'timestamp':start+60,'high':105,'low':99,'close':104}]
+    baseline=r.price_room(rows,at,'CE',100)
+    assert r.price_room(rows+[{'timestamp':int(at.timestamp())+60,'high':99999,'low':1,'close':1}],at,'CE',100)==baseline

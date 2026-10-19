@@ -5,7 +5,7 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 project=theta-pluse
 region=asia-south1
 service=theta-plus
-expected_version=theta-foundation-3.4.3
+expected_version=theta-foundation-3.5.0
 command -v gcloud >/dev/null
 command -v curl >/dev/null
 work=$(mktemp -d)
@@ -36,13 +36,13 @@ rollback=$(cat "$work/rollback")
 url=$(cat "$work/url")
 candidate=${1:-}
 if [[ -n $candidate ]]; then
-  [[ $candidate =~ ^theta-plus-f343-[0-9]{14}$ ]] || { echo 'Invalid candidate revision' >&2; exit 1; }
+  [[ $candidate =~ ^theta-plus-f350-[0-9]{14}$ ]] || { echo 'Invalid candidate revision' >&2; exit 1; }
   echo "Reusing candidate $candidate."
 else
   build_account="projects/$project/serviceAccounts/theta-plus-build@$project.iam.gserviceaccount.com"
   # Existing account only; no creation, IAM edits, secrets or configuration reset.
   gcloud iam service-accounts describe "theta-plus-build@$project.iam.gserviceaccount.com" --project="$project" --format='value(email)' >/dev/null
-  suffix="f343-$(date -u +%Y%m%d%H%M%S)"
+  suffix="f350-$(date -u +%Y%m%d%H%M%S)"
   candidate="$service-$suffix"
   echo "Building candidate $candidate; existing traffic remains unchanged."
   gcloud run deploy "$service" --source=. --project="$project" --region="$region" \
@@ -88,6 +88,7 @@ retired_status=$(curl --silent --show-error --max-time 30 --output /dev/null --w
 curl --fail --silent --show-error --max-time 30 "$url/api/dhan/collected" > "$work/retained-data.json"
 collection_status=$(curl --silent --show-error --max-time 30 --output /dev/null --write-out '%{http_code}' -H 'Content-Type: application/json' --data '{}' "$url/api/collection/catalogue/refresh")
 [[ $collection_status == 403 || $collection_status == 503 ]] || { echo 'Collection Admin protection failed' >&2; exit 1; }
+python3 deploy/sync_worker_image.py "$work/candidate.json"
 promoted=false
 printf '\nDEPLOY VERIFIED\nVersion: %s\nRevision: %s\nURL: %s\n' "$expected_version" "$candidate" "$url"
 printf 'Rollback if needed: gcloud run services update-traffic %s --project=%s --region=%s --to-revisions=%s\n' "$service" "$project" "$region" "$rollback"

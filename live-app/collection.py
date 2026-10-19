@@ -5,6 +5,7 @@ Every run handles one checkpointed work item under a shared expiring lease.
 """
 from __future__ import annotations
 import asyncio
+import anyio
 import base64
 import csv
 import hashlib
@@ -62,6 +63,7 @@ def replace(store, key, fn):
 class CollectionPlan(Model):
     start: date
     end: date
+    continue_rejected_requests: bool = False
     families: list[Literal['daily','intraday','rolling','chain','quotes','live','depth20','depth200']] = Field(default_factory=lambda:list(FAMILIES),min_length=1,max_length=8)
     intervals: list[Literal[1,5,15,25,60]] = Field(default_factory=lambda:[1],min_length=1,max_length=5)
     segments: list[str] = Field(default_factory=list,max_length=8)
@@ -142,7 +144,8 @@ class Collector:
         replace(self.store,'control/lease',drop)
 
     async def refresh_catalogue(self):
-        owner=await asyncio.to_thread(self.acquire)
+        with anyio.CancelScope(shield=True):
+            owner=await anyio.to_thread.run_sync(self.acquire)
         temporary=tempfile.TemporaryDirectory(prefix='theta-catalogue-')
         try:
             source=Path(temporary.name)/'master.csv'
@@ -157,7 +160,7 @@ class Collector:
                             checksum.update(chunk);out.write(chunk)
             def parse():
                 with source.open(encoding='utf-8-sig',newline='') as inp:return parse_catalogue(inp)
-            items,counts,unknown=await asyncio.to_thread(parse)
+            items,counts,unknown=await anyio.to_thread.run_sync(parse)
             sha=checksum.hexdigest()
             def save():
                 self.store.put_catalogue_source(sha,source)
@@ -187,10 +190,11 @@ class Collector:
                 install_once(self.store,'catalogue/'+sha+'/manifest',manifest)
                 replace(self.store,'catalogue/current',lambda _:manifest)
                 return manifest
-            return await asyncio.to_thread(save)
+            return await anyio.to_thread.run_sync(save)
         finally:
-            temporary.cleanup()
-            await asyncio.to_thread(self.release,owner)
+            with anyio.CancelScope(shield=True):
+                temporary.cleanup()
+                await anyio.to_thread.run_sync(self.release,owner)
 
     def catalogue(self):
         return self.store.document('catalogue/current')[0]
@@ -242,6 +246,21 @@ class Collector:
         return {'jobs':[self.summary(self.store.document(k)[0]) for k in names[:20]],
                 'next_cursor':names[19] if len(names)>20 else None}
 
+    def record_rejection(self,job,task,reason,code=None,http_status=None):
+        """Explicit failure outcome, never successful coverage or unsupported inference."""
+        key=digest({k:v for k,v in task.items() if k not in ('skip','horizon_gap')})
+        if task['family'] not in ('daily','intraday','rolling'):key=digest([job['id'],key])
+        install_once(self.store,'results/'+job['id']+'/'+key,{
+            'task':task,'checked_at':now(),'result':{'status':'failed','rows':0,'reason':reason,
+            'code':code,'http_status':http_status,'coverage':'NOT_COLLECTED','review_required':True}})
+        job['counts']['failed']+=1;job['items_assessed']+=1
+        if task['family']=='chain_snapshot':
+            job['chain_pending'].pop(0)
+            if job['chain_pending']:job['current']={**job['chain_parent'],'family':'chain_snapshot','expiry':job['chain_pending'][0]}
+            else:job.pop('current',None);job.pop('chain_parent',None)
+        else:self.advance(job,task);job.pop('current',None)
+        job['retries']=0;job.pop('retry_at',None);job.pop('request_error',None)
+
     def control(self,jid,action):
         self.get_job(jid)
         def change(job):
@@ -249,6 +268,18 @@ class Collector:
             elif action=='resume':
                 if job['state']=='completed':return job
                 job['state']='running';job['message']='Running in bounded requests'
+            elif action=='continue-rejected':
+                if job['state']!='request_review' or not job.get('current'):
+                    raise HTTPException(409,'No rejected work item awaiting review')
+                err=job.get('request_error') or {}
+                if err.get('code') not in ('DH-905','DH-907') and err.get('http_status') not in (400,422):
+                    raise HTTPException(409,'This error requires manual review')
+                job['config']['continue_rejected_requests']=True
+                self.record_rejection(job,job['current'],job['message'],err.get('code'),err.get('http_status'))
+                job['state']='paused';job['message']='Rejected request recorded as failed, not collected. Resume continues other data; further invalid/no-data requests are recorded as failed. Token, permission and rate-limit errors still stop or back off.'
+            elif action=='stop-on-rejected':
+                if job['state']=='running':raise HTTPException(409,'Pause the job before changing rejection policy')
+                job['config']['continue_rejected_requests']=False
             elif action=='skip-blocked':
                 if job['state']!='permission_blocked' or not job.get('current'):
                     raise HTTPException(409,'No permission-blocked work item')
@@ -546,7 +577,8 @@ class Collector:
                 'missing_security_ids':sorted(expected-observed),'continuous':False,'exchange_time_verified':False}
 
     async def run(self,jid):
-        owner=await asyncio.to_thread(self.acquire)
+        with anyio.CancelScope(shield=True):
+            owner=await anyio.to_thread.run_sync(self.acquire)
         try:
             job=await asyncio.to_thread(self.get_job,jid)
             if job['state']!='running':return self.summary(job)
@@ -612,12 +644,19 @@ class Collector:
                     job['state']='paused';job['provider_calls']=max(0,job['provider_calls']-1)
                 elif code in ACCESS_CODES or exc.status==403:
                     job['state']='permission_blocked'
-                elif code=='DH-905' or exc.status in (400,422):
+                elif exc.status==429 or code=='DH-904':
+                    job['retries']+=1;job['retry_at']=time.time()+min(300,5*2**min(job['retries'],6))
+                    job['message']='Rate limited; backing off at the same checkpoint. No data was marked complete.'
+                elif code in ('DH-905','DH-907') or exc.status in (400,422):
                     # A rejected request needs review, not repeated identical calls or cursor advancement.
-                    job['state']='request_review'
-                    job['request_error']={'code':code,'http_status':exc.status,'checked_at':now()}
-                    job['retries']=0;job.pop('retry_at',None)
-                    job['message']=str(exc)+'. Collection stopped at this item. Review instrument eligibility and dates; create a revised plan or explicitly resume to retry. No data was marked complete.'
+                    if job['config'].get('continue_rejected_requests'):
+                        self.record_rejection(job,task,str(exc),code,exc.status)
+                        job['message']='Rejected request recorded as failed / NOT_COLLECTED. Continuing other data. Review failed results; this is not complete historical coverage.'
+                    else:
+                        job['state']='request_review'
+                        job['request_error']={'code':code,'http_status':exc.status,'checked_at':now()}
+                        job['retries']=0;job.pop('retry_at',None)
+                        job['message']=str(exc)+'. Collection stopped at this item. Review dates or explicitly record rejection and continue other data. No data was marked complete.'
                 else:
                     job['retries']+=1
                     if job['retries']<3:
@@ -636,7 +675,9 @@ class Collector:
             job['updated_at']=now()
             await asyncio.to_thread(self.save_job,job)
             return self.summary(job)
-        finally:await asyncio.to_thread(self.release,owner)
+        finally:
+            with anyio.CancelScope(shield=True):
+                await anyio.to_thread.run_sync(self.release,owner)
 
     def save_job(self,job):
         def save(old):

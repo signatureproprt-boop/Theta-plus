@@ -13,7 +13,7 @@ from runtime import IST
 from dhan_data import candle_count
 from provider import ProviderError
 
-RULE_VERSION='research-1.0'
+RULE_VERSION='research-1.1'
 POLICY={
     'candle':{'max_age_seconds':90,'timestamp':'exchange candle close','required':['exchange_at','received_at','open','high','low','close','volume']},
     'chain':{'max_age_seconds':10,'timestamp':'exchange quote, not server receipt','required':['expiry','strike','side','security_id','bid','ask','volume','oi']},
@@ -198,6 +198,27 @@ class RuleConfig(Model):
     min_room_r: FiniteFloat = Field(default=1.5,ge=1,le=10)
     expiry_day_allowed: bool = False
 
+def price_room(candles,clock,side,invalidation):
+    """Nearest observed prior-session/earlier-today obstacle; never assume clear sky."""
+    candles=sorted((r for r in candles if stamp(r['timestamp'])+timedelta(minutes=1)<=clock),key=lambda r:r['timestamp'])
+    if side not in ('CE','PE') or invalidation is None or len(candles)<2:return None
+    entry=candles[-1]['close'];risk=(entry-invalidation) if side=='CE' else (invalidation-entry)
+    if risk<=0:return None
+    day=clock.astimezone(IST).date();groups={}
+    for row in candles[:-1]:
+        groups.setdefault(stamp(row['timestamp']).astimezone(IST).date(),[]).append(row)
+    previous=[d for d in groups if d<day];days=([max(previous)] if previous else [])+([day] if day in groups else [])
+    levels=[]
+    for d in days:
+        rows=groups[d]
+        if d<day and len({r['timestamp'] for r in rows})!=375:continue
+        for name,value in [('high',max(r['high'] for r in rows)),('low',min(r['low'] for r in rows))]:
+            distance=value-entry if side=='CE' else entry-value
+            if distance>0:levels.append({'price':value,'distance':distance,'basis':str(d)+' observed '+name})
+    if not levels:return None
+    obstacle=min(levels,key=lambda r:r['distance'])
+    return {**obstacle,'underlying_risk_points':risk,'room_r':obstacle['distance']/risk,'entry_reference':entry}
+
 def setup_rules(candles,clock,setup,config=None,contract=None,breadth=None,context_fresh=False,room_r=None,indicator_view=None):
     cfg=config or RuleConfig();reasons=[];missing=[];wait=[];reject=[]
     closed=[r for r in candles if stamp(r['timestamp'])+timedelta(minutes=1)<=clock]
@@ -247,8 +268,11 @@ def setup_rules(candles,clock,setup,config=None,contract=None,breadth=None,conte
     local=clock.astimezone(IST)
     if not (local.weekday()<5 and '09:30'<=local.strftime('%H:%M')<'15:00'):reject.append('OUTSIDE_ENTRY_WINDOW')
     if not context_fresh:missing.append('EVENT_CONTEXT_UNAVAILABLE')
-    if breadth is None:missing.append('BREADTH_UNAVAILABLE')
-    elif direction and (breadth if direction=='CE' else 1-breadth)<cfg.min_breadth_fraction:reject.append('PARTICIPATION_WEAK')
+    fraction=(breadth.get('fraction_up') if direction=='CE' else breadth.get('fraction_down')) if isinstance(breadth,dict) else (breadth if direction=='CE' else 1-breadth) if breadth is not None else None
+    if fraction is None:missing.append('BREADTH_UNAVAILABLE')
+    elif direction and fraction<cfg.min_breadth_fraction:reject.append('PARTICIPATION_WEAK')
+    observed_room=price_room(closed,clock,direction,invalid)
+    if room_r is None and observed_room:room_r=observed_room['room_r']
     if room_r is None:missing.append('ROOM_TO_LEVEL_UNAVAILABLE')
     elif room_r<cfg.min_room_r:reject.append('RESISTANCE_TOO_CLOSE')
     if not contract:missing.append('OPTION_QUOTE_UNAVAILABLE')
@@ -264,7 +288,7 @@ def setup_rules(candles,clock,setup,config=None,contract=None,breadth=None,conte
     state='DATA_UNAVAILABLE' if missing else 'NO_TRADE' if reject else 'WAIT' if wait else 'CONFIRM'
     return {'state':state,'setup':setup,'rule_version':RULE_VERSION,'config':cfg.model_dump(),
             'clock':clock.isoformat(),'side':direction,'reason_codes':list(dict.fromkeys(missing+reject+wait+reasons)),
-            'missing':missing,'failed':reject,'pending':wait,'passed':reasons,'reference_level':level,'underlying_invalidation':invalid,
+            'room_r':room_r,'observed_obstacle':observed_room,'missing':missing,'failed':reject,'pending':wait,'passed':reasons,'reference_level':level,'underlying_invalidation':invalid,
             'indicators':ind,'execution':'NO_BROKER_EXECUTION','validation':'UNVALIDATED_RESEARCH_RULES'}
 
 class RiskInput(Model):
@@ -394,14 +418,30 @@ def workspace(store,symbol,clock=None,options=None,contract_id=''):
     for row in candles:
         day=stamp(row['timestamp']).astimezone(IST).date().isoformat()
         session_rows.setdefault(day,0);session_rows[day]+=1
+    from breadth import view as breadth_view
+    breadth=breadth_view(store.document('research/breadth/'+symbol)[0],clock)
+    from session_chart import future_vwap
+    future_record=store.document('research/future/'+symbol)[0]
+    futures=future_vwap(future_record,clock) if future_record and stamp(future_record.get('received_at')) and stamp(future_record['received_at'])<=clock else {'state':'NOT_CONNECTED','value':None}
+    today=clock.astimezone(IST).date().isoformat()
     session_quality=[{'date':day,'observed_minutes':count,'missing_regular_grid_minutes':max(0,375-count),
                       'calendar_certified':False} for day,count in sorted(session_rows.items())]
-    return {'symbol':symbol,'server_time':clock.isoformat(),'mode':'READ_ONLY_RESEARCH','rule_version':RULE_VERSION,
+    readiness=[
+        {'item':'Current session candles','state':str(session_rows.get(today,0))+'/375 retained minutes','next':'Only provider closed bars; check missing grid minutes and exchange calendar.'},
+        {'item':'Option identity','state':str(sum(c['identity_verified'] for c in chain['contracts']))+' verified contracts','next':'Select exact expiry, strike, side and lot.'},
+        {'item':'Option quote time','state':chain['status'],'next':'Requires exchange quote timestamp; LTT and server receipt cannot replace it.'},
+        {'item':'Constituent breadth','state':breadth['state'],'next':'Current official membership + every constituent recent; equal-count, not weights.'},
+        {'item':'Futures candle VWAP','state':futures['state'],'next':'Requires complete recent exact-future OHLCV.'},
+        {'item':'Event calendar','state':'VERIFIED_SOURCE_REQUIRED','next':'Authorised event source and coverage contract required; no-event status is not inferred.'},
+        {'item':'Option backtest','state':'EXACT_CONTRACT_HISTORY_REQUIRED','next':'Rolling ATM history does not establish exact expiry/strike execution or bid/ask.'},
+        {'item':'Paper validation','state':'ACTUAL_FORWARD_TRADES_REQUIRED','next':'50+ verified forward paper trades across regimes; manual hypothetical entries do not certify accuracy.'},
+    ]
+    return {'readiness':readiness,'futures_context':futures,'symbol':symbol,'server_time':clock.isoformat(),'mode':'READ_ONLY_RESEARCH','rule_version':RULE_VERSION,
             'session_quality':session_quality,
             'policies':POLICY,'history':loaded,'indicators':indicators(candles,clock),
             'latest_candle':latest,'candle_freshness':freshness(latest['closed_at'],latest['received_at'],clock,90) if latest else {'state':'MISSING'},
-            'chain':chain,'selected_contract':contract,'setups':[setup_rules(candles,clock,s,contract=contract) for s in ('opening_range','trend_pullback')],
-            'availability':{'breadth':'NOT_CONNECTED','events':'NOT_CONNECTED','futures_vwap':'NOT_VERIFIED',
+            'breadth':breadth,'chain':chain,'selected_contract':contract,'setups':[setup_rules(candles,clock,s,contract=contract,breadth=breadth) for s in ('opening_range','trend_pullback')],
+            'availability':{'breadth':breadth['state'],'events':'NOT_CONNECTED','futures_vwap':futures['state'],
                             'continuous_feed':'SEE_LIVE_PANEL_STATUS','iv_percentile':'HISTORY_UNVERIFIED','pcr_history':'CADENCE_UNVERIFIED'},
             'validation':{'rule_state':'UNVALIDATED','paper_trade_minimum':50,'multiple_regimes_required':True,
                           'option_backtest_ready':False,'live_orders':False}}
