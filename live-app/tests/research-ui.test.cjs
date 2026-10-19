@@ -20,7 +20,7 @@ test('options screen labels snapshot PCR and unverified history without polling 
   const e=environment();await e.flush();const html=e.element('page-options').innerHTML;
   assert.match(html,/OI PCR/);assert.match(html,/Continuous cadence unverified/);
   assert.match(html,/TIME_UNVERIFIED/);assert.match(html,/does not establish continuous/i);
-  assert.equal(e.calls.length,1);assert.equal(e.calls[0].url,'/api/research/workspace?symbol=nifty');
+  assert.equal(e.calls.length,1);assert.equal(e.calls[0].url,'/api/research/workspace?symbol=nifty&contract_id=');
   assert.ok(e.calls.every(c=>!c.url.includes('/api/collection/')&&!c.o.method?.includes('POST')));
 });
 test('missing data still renders research chart and unavailable message',async()=>{
