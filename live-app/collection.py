@@ -392,6 +392,8 @@ class Collector:
                 body={'exchangeSegment':segment,'securityId':sid,'instrument':inst,
                       'oi':inst not in ('EQUITY','INDEX'),'fromDate':task['from'],'toDate':task['to'],**variant}
                 endpoint='charts/historical' if family=='daily' else 'charts/intraday'
+                if family=='daily':body['expiryCode']=0
+                else:body.update(fromDate=task['from']+' 00:00:00',toDate=task['to']+' 00:00:00')
             raw=await self.call(owner,endpoint,body)
             return {'endpoint':endpoint,'request':body,'raw':raw,'received_at':now()}
         if family=='chain':
@@ -469,14 +471,18 @@ class Collector:
             raise ProviderError('Required historical arrays missing')
         n=len(row['timestamp'])
         if any(len(row[k])!=n for k in required):raise ProviderError('Historical arrays differ in length')
-        by_day={};duplicates=0;observed=set()
+        by_day={};duplicates=0;outside_range=0;observed=set()
         for i,stamp in enumerate(row['timestamp']):
             if isinstance(stamp,bool) or not isinstance(stamp,(int,float)) or not math.isfinite(stamp):
                 raise ProviderError('Invalid historical timestamp')
             at=datetime.fromtimestamp(stamp,timezone.utc).astimezone(IST)
             if int(stamp)!=stamp or int(stamp)%60:
                 raise ProviderError('Historical timestamp is not on a minute boundary')
-            if not task['from']<=at.date().isoformat()<task['to']:raise ProviderError('Historical timestamp outside requested range')
+            if not task['from']<=at.date().isoformat()<task['to']:
+                if family!='rolling':raise ProviderError('Historical timestamp outside requested range')
+                # Rolling responses can include their end-date boundary. Raw is
+                # retained; only the requested interval enters normalized storage.
+                outside_range+=1;continue
             candle={k:row[k][i] for k in required}
             if any(isinstance(candle[k],bool) or not isinstance(candle[k],(int,float)) or not math.isfinite(candle[k]) for k in required):
                 raise ProviderError('Non-numeric historical value')
@@ -498,7 +504,7 @@ class Collector:
                         'calendar_check':'Pending exchange calendar; no gaps filled'}
             replace(self.store,'candles/'+series+'/'+day,change)
         with ThreadPoolExecutor(max_workers=8) as pool:list(pool.map(merge,by_day.items()))
-        return {'rows':len(observed),'duplicate_timestamps':duplicates,'quality':'ROWS_PRESENT' if n else 'EMPTY',
+        return {'rows':len(observed),'duplicate_timestamps':duplicates,'outside_requested_dates':outside_range,'quality':'ROWS_PRESENT' if observed else 'EMPTY',
                 'session_validation':'Pending correct exchange calendar','days':len(by_day),'days_saved':sorted(by_day),'series':series}
 
     def persist_result(self,task,response):

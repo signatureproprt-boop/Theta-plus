@@ -68,7 +68,7 @@ original records/archive are retained. No order or trading API is added.
 1. Deploy live-app with deploy/release-existing.sh from an authenticated Cloud
    Shell. It builds a candidate without traffic, retains existing environment,
    secrets, storage and IAM, verifies readiness, promotes and rolls back on smoke
-   failure. Version: theta-foundation-3.1.2, candidate suffix f312.
+   failure. Version: theta-foundation-3.1.3, candidate suffix f313.
 2. Open Admin and unlock with the existing Admin password.
 3. Open Collect all data, check subscription/segments, refresh the full catalogue.
 4. Choose dates, families and intervals. Create plan, then Resume selected job.
@@ -104,3 +104,25 @@ existing saved catalogue pages. No catalogue refresh or deletion is required.
 Old zero-work completed jobs remain as evidence; create a new plan to collect
 their intended range. New jobs assessing zero work stop as no_work rather than
 claiming successful completion.
+
+
+### Saved-data validation (3.1.3)
+- Minute requests begin at IST midnight so the exact 09:15 opening minute is
+  included. Historical requests use a bounded 60-second provider timeout;
+  timeouts are distinct from provider input rejection. Daily payloads include
+  expiryCode 0, matching the official example; this is not proof of daily API
+  availability, which must be checked live after deployment.
+- Saved history loads independently of status and chains. Loading/errors no longer
+  masquerade as an empty archive. Exports keep their storage kind; CE/PE, expiry
+  selection and date range are visible. Check quality preserves raw records and
+  reports missing, outside-range and off-session rows.
+- /api/dhan/coverage combines at most 500 saved history records for a requested
+  range of at most 31 days. It separates index, side and relative-expiry variants,
+  deduplicates identical timestamp/strike observations, excludes conflicting
+  observations and reports them. Normalized exports include only actual candles
+  inside the requested date range and 09:15–15:29 IST. Raw records are untouched.
+  Weekday grids do not establish exchange holidays or special-session coverage;
+  rolling ATM data is not a fixed-expiry, fixed-strike trade series.
+- deploy/check-data.py checks the live version, recent saved coverage and the
+  three index daily requests. It reports provider rejection as PENDING rather
+  than declaring completion. It does not alter authentication or cloud settings.

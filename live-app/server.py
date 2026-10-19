@@ -19,6 +19,7 @@ from token_check import check_token
 from research_audit import audit_historical
 from dhan_data import fetch_history,fetch_chain,verify_record
 from collection import Collector,CollectionPlan
+from history_coverage import coverage_report
 ROOT=Path(__file__).parent
 class DhanTokenInput(Model):
     token: str = Field(min_length=20,max_length=4096)
@@ -262,10 +263,16 @@ def create_app(db_path=None):
         except ValueError as exc:raise HTTPException(422,str(exc)) from None
         except ProviderError as exc:raise HTTPException(503,str(exc)) from None
 
+    @app.get('/api/dhan/coverage')
+    def dhan_coverage(start:date,end:date,include_rows:bool=False):
+        try:return coverage_report(store,start,end,include_rows)
+        except ValueError as exc:raise HTTPException(422,str(exc)) from None
+
     @app.get('/api/dhan/collected')
-    def dhan_collected():
+    def dhan_collected(kind:str|None=None):
+        if kind is not None and kind not in ('dhan_history','dhan_chain'):raise HTTPException(422,'Unknown record kind')
         return {kind:[{'id':r['id'],**r['data']['metadata']} for r in store.rows(kind,500)]
-                for kind in ('dhan_history','dhan_chain')}
+                for kind in ((kind,) if kind else ('dhan_history','dhan_chain'))}
 
     @app.get('/api/dhan/collected/{kind}/{record_id}')
     def dhan_collected_raw(kind:str,record_id:int):

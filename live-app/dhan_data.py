@@ -2,6 +2,7 @@
 from datetime import date, datetime, timedelta, timezone
 from collections import Counter
 import time
+import math
 from runtime import IST
 from provider import ProviderError
 
@@ -14,15 +15,29 @@ def candle_count(raw):
         raise ProviderError('Historical response has no complete OHLCV arrays')
     if len({len(raw[k]) for k in FIELDS})!=1:
         raise ProviderError('Historical OHLCV arrays have different lengths')
+    validate_row(raw,FIELDS)
     return len(raw['timestamp'])
+
+def validate_row(row,fields):
+    if any(not isinstance(row.get(k),list) for k in fields) or len({len(row[k]) for k in fields})!=1:
+        raise ProviderError('Historical response is missing aligned required arrays')
+    for i,stamp in enumerate(row['timestamp']):
+        if any(isinstance(row[k][i],bool) or not isinstance(row[k][i],(int,float)) or not math.isfinite(row[k][i]) for k in fields):
+            raise ProviderError('Historical response contains non-numeric or non-finite values')
+        try:datetime.fromtimestamp(stamp,timezone.utc)
+        except (ValueError,OverflowError,OSError):raise ProviderError('Historical timestamp is out of bounds') from None
+        if int(stamp)!=stamp or int(stamp)%60:raise ProviderError('Historical timestamp is off the minute grid')
+        if any(row[k][i]<0 for k in fields if k!='timestamp'):raise ProviderError('Historical response contains negative values')
+        if row['high'][i]<max(row[k][i] for k in ('open','low','close')) or row['low'][i]>min(row[k][i] for k in ('open','high','close')):
+            raise ProviderError('Historical response contains invalid OHLC values')
+
 
 def option_count(raw,side):
     row=(raw.get('data') or {}).get('ce' if side=='CALL' else 'pe') if isinstance(raw,dict) else None
     if row is None:return 0
     if not isinstance(row,dict) or not isinstance(row.get('timestamp'),list):
         raise ProviderError('Expired option response has no timestamp array')
-    lengths=[len(row[k]) for k in ('timestamp',)+OPTION_FIELDS if isinstance(row.get(k),list)]
-    if len(set(lengths))!=1:raise ProviderError('Expired option arrays have different lengths')
+    validate_row(row,('timestamp',)+OPTION_FIELDS)
     return len(row['timestamp'])
 
 async def fetch_history(provider,store,*,kind,index,start,end,strike='ATM',side='CALL',expiry_flag='MONTH',expiry_code=1,instrument=None):
@@ -35,10 +50,13 @@ async def fetch_history(provider,store,*,kind,index,start,end,strike='ATM',side=
     if not instrument or instrument.get('segment')!=expected_segment or instrument.get('instrument')!=expected_type:
         raise ProviderError('Exact security ID is not available in current Dhan instrument master')
     sid=int(instrument['security_id'])
-    if kind in ('index','future'):
+    if kind in ('index','future','daily'):
         body={'securityId':str(sid),'exchangeSegment':expected_segment,'instrument':expected_type,'interval':'1','oi':kind=='future',
-              'fromDate':start.isoformat()+' 09:15:00','toDate':end.isoformat()+' 00:00:00'}
+              'fromDate':start.isoformat()+' 00:00:00','toDate':end.isoformat()+' 00:00:00'}
         endpoint='charts/intraday'
+        if kind=='daily':
+            body.pop('interval');body.update(expiryCode=0,fromDate=start.isoformat(),toDate=end.isoformat())
+            endpoint='charts/historical'
     elif kind=='expired_option':
         if index=='india_vix':raise ValueError('VIX has no index option history here')
         if strike not in (['ATM']+[f'ATM{sign}{n}' for sign in ('+','-') for n in range(1,11)]):
@@ -51,7 +69,7 @@ async def fetch_history(provider,store,*,kind,index,start,end,strike='ATM',side=
         endpoint='charts/rollingoption'
     else:raise ValueError('Unsupported historical data type')
     raw=await provider.post(endpoint,body)
-    count=candle_count(raw) if kind in ('index','future') else option_count(raw,side)
+    count=candle_count(raw) if kind in ('index','future','daily') else option_count(raw,side)
     metadata={'provider':'DhanHQ','endpoint':endpoint,'kind':kind,'index':index,'from':start.isoformat(),
               'security_id':str(sid),
               'to_exclusive':end.isoformat(),'strike':strike if kind=='expired_option' else None,
@@ -60,8 +78,10 @@ async def fetch_history(provider,store,*,kind,index,start,end,strike='ATM',side=
               'fetched_at':datetime.now(timezone.utc).isoformat(),'relative_strike':kind=='expired_option',
               'historical_bid_ask':False,'contract_expiry':instrument.get('expiry') if kind=='future' else None}
     # An empty response is recorded too, so it cannot silently appear as successful data.
-    record_id=store.add('dhan_history',{'metadata':metadata,'raw':raw})
-    return {'id':record_id,**metadata,'quality':verify_record({'metadata':metadata,'raw':raw})}
+    quality=verify_record({'metadata':metadata,'raw':raw})
+    metadata.update(request_version=2,regular_session_rows=quality.get('regular_session_rows'),quality_status=quality['status'])
+    record_id=store.add('dhan_history',{'metadata':metadata,'raw':raw,'request':body,'quality':quality})
+    return {'id':record_id,**metadata,'quality':quality}
 
 async def fetch_chain(provider,store,index,instrument):
     if index not in ('nifty','banknifty'):raise ValueError('Choose NIFTY or BANKNIFTY')
@@ -94,23 +114,33 @@ def verify_record(record):
         oc=(raw.get('data') or {}).get('oc') or {}
         return {'kind':kind,'strikes':len(oc),'received_at':meta['fetched_at'],
                 'note':'Server receipt time, not exchange quote time. No historical OHLC.'}
-    row=raw if kind in ('index','future') else (raw.get('data') or {}).get('ce' if meta['side']=='CALL' else 'pe')
+    row=raw if kind in ('index','future','daily') else (raw.get('data') or {}).get('ce' if meta['side']=='CALL' else 'pe')
     if not isinstance(row,dict) or not isinstance(row.get('timestamp'),list):
         return {'kind':kind,'rows':0,'status':'EMPTY','sessions':[]}
+    try:
+        if kind in ('index','future','daily'):candle_count(row)
+        else:option_count(raw,meta['side'])
+    except ProviderError as exc:return {'kind':kind,'rows':len(row['timestamp']),'status':'INVALID','reason':str(exc),'sessions':[]}
     stamps=row['timestamp'];parsed=[]
     for stamp in stamps:
         parsed.append(datetime.fromtimestamp(stamp,timezone.utc).astimezone(IST))
-    counts=Counter(t.strftime('%Y-%m-%d %H:%M') for t in parsed)
+    if kind=='daily':
+        return {'kind':kind,'rows':len(stamps),'status':'ROWS_PRESENT' if stamps else 'EMPTY',
+                'session_validation':'Exchange calendar validation pending; daily candles are not minute sessions'}
+    in_range=[t for t in parsed if (not meta.get('from') or t.date().isoformat()>=meta['from']) and (not meta.get('to_exclusive') or t.date().isoformat()<meta['to_exclusive'])]
+    outside=len(parsed)-len(in_range)
+    counts=Counter(t.strftime('%Y-%m-%d %H:%M') for t in in_range)
     by_day={}
-    for t in parsed:by_day.setdefault(t.date(),set()).add(t.strftime('%H:%M'))
+    for t in in_range:by_day.setdefault(t.date(),set()).add(t.strftime('%H:%M'))
     sessions=[]
     for day,times in sorted(by_day.items()):
         expected={(datetime(2000,1,1,9,15)+timedelta(minutes=i)).strftime('%H:%M') for i in range(375)}
         missing=sorted(expected-times)
-        sessions.append({'date':day.isoformat(),'minute_rows':sum(t.date()==day for t in parsed),
+        sessions.append({'date':day.isoformat(),'minute_rows':sum(t.date()==day for t in in_range),
                          'missing_count':len(missing),'missing_ist':missing[:20],
                          'off_session_count':len(times-expected)})
-    result={'kind':kind,'rows':len(stamps),'status':'ROWS_PRESENT' if stamps else 'EMPTY',
+    regular=sum('09:15'<=t.strftime('%H:%M')<'15:30' for t in in_range)
+    result={'outside_requested_dates':outside,'in_range_rows':len(in_range),'regular_session_rows':regular,'off_session_rows':len(in_range)-regular,'kind':kind,'rows':len(stamps),'status':'ROWS_PRESENT' if stamps else 'EMPTY',
             'first_ist':min(parsed).isoformat() if parsed else None,
             'last_ist':max(parsed).isoformat() if parsed else None,
             'duplicate_minutes':sum(n-1 for n in counts.values()),'sessions':sessions,
