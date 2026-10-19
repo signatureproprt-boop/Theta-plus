@@ -3,7 +3,7 @@
   const node=id=>document.getElementById(id);
   const escape=v=>String(v??'—').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const fmt=v=>v==null?'—':Number(v).toLocaleString('en-IN',{maximumFractionDigits:2});
-  let active=false,controller=null,generation=0,symbol='nifty',state='Disconnected',rows=new Map(),points=[],lastFrame=0,retries=0,connected=false,stalled=false;
+  let active=false,controller=null,generation=0,symbol='nifty',state='Disconnected',rows=new Map(),points=[],lastFrame=0,retries=0,connected=false,stalled=false,retryDelay=2500,busySince=0;
   function text(message){state=message;if(node('research-live-state'))node('research-live-state').textContent=message;}
   function currentTrade(r){const at=Date.parse(r.trade_at);const age=Date.now()-at;return Number.isFinite(at)&&age>=0&&age<=10000&&r.trade_state==='RECENT_TRADE';}
   function render(){
@@ -27,8 +27,14 @@
     html+=`<path d="${path}" fill="none" stroke="var(--mint)" stroke-width="1.7"/><text x="12" y="222">${new Date(first).toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata'})} IST</text><text x="${width-pad}" y="222" text-anchor="end">Observed LTP · ${escape(symbol.toUpperCase())}</text>`;svg.innerHTML=html;
   }
   function receive(data){lastFrame=Date.now();if(data.type==='status'){
+      if(data.state==='STREAM_BUSY'){
+        busySince=busySince||Date.now();
+        if(Date.now()-busySince>=330000){active=false;text('Another live tab is still active. Stop that tab, then Start live here.');}
+        else {retryDelay=5000;text('Another stream is closing or active · retrying in 5s. Stop cancels this retry.');}
+        render();return;
+      }
       if(data.state==='UNAVAILABLE'||data.state==='PROVIDER_DISCONNECT'){active=false;text(data.state+' · '+(data.message||('Provider code '+data.code)));render();return;}
-      if(data.state==='CONNECTED_AWAITING_TICKS')connected=true;
+      if(data.state==='CONNECTED_AWAITING_TICKS'){connected=true;busySince=0;retryDelay=2500;}
       text(data.state==='RENEW_CONNECTION'?'Renewing connection…':data.state);return;
     }
     if(data.type!=='batch')return;
@@ -46,12 +52,13 @@
   async function connect(id){
     while(active&&generation===id){controller=new AbortController();connected=false;lastFrame=Date.now();try{
       const response=await window.thetaLiveStreamRequest(symbol,controller.signal);
-      if(!response.ok){const result=await response.json();throw Error(result.detail||'Live request rejected');}
+      if(generation!==id||!active){await response.body?.cancel?.().catch(()=>{});break;}
+      if(!response.ok){const result=await response.json();if(response.status===409){receive({type:'status',state:'STREAM_BUSY'});if(active&&generation===id)await new Promise(resolve=>setTimeout(resolve,retryDelay));continue;}throw Error(result.detail||'Live request rejected');}
       if(!response.body)throw Error('Streaming is unavailable in this browser');
       const reader=response.body.getReader(),decoder=new TextDecoder();let pending='';
-      while(active&&generation===id){const {done,value}=await reader.read();if(done)break;pending+=decoder.decode(value,{stream:true});if(pending.length>2000000)throw Error('Invalid stream size');let end;while((end=pending.indexOf('\n\n'))>=0){const block=pending.slice(0,end);pending=pending.slice(end+2);if(block.startsWith('data: '))receive(JSON.parse(block.slice(6)));}}
+      while(active&&generation===id){const {done,value}=await reader.read();if(done)break;pending+=decoder.decode(value,{stream:true});if(pending.length>2000000)throw Error('Invalid stream size');let end;while((end=pending.indexOf('\n\n'))>=0){const block=pending.slice(0,end);pending=pending.slice(end+2);if(block.startsWith('data: ')&&active&&generation===id)receive(JSON.parse(block.slice(6)));}}
       await reader.cancel().catch(()=>{});
-      if(active&&generation===id){text('Renewing live connection…');await new Promise(resolve=>setTimeout(resolve,2500));}
+      if(active&&generation===id){if(!busySince)text('Renewing live connection…');await new Promise(resolve=>setTimeout(resolve,retryDelay));}
     }catch(error){if(generation!==id||!active)break;if(error.name==='AbortError'&&!stalled)break;stalled=false;retries++;
       // Authentication/configuration failures need a deliberate user action.
       if(/Admin|password|credentials|token|rejected/i.test(error.message)||retries>=5){active=false;text(error.message);render();break;}
@@ -62,7 +69,7 @@
   window.thetaLiveStop=()=>{active=false;generation++;controller?.abort();text('Disconnected · last observations retained, not live');render();};
   window.thetaLiveMount=()=>{
     if(!node('research-live-start'))return;
-    node('research-live-start').onclick=()=>{if(active)return;if(typeof window.thetaLiveStreamRequest!=='function'){text('Open Admin and Unlock Admin first.');render();return;}symbol=node('research-symbol')?.value||'nifty';rows=new Map();points=[];retries=0;active=true;window.thetaSessionRefresh?.();lastFrame=Date.now();text('Connecting…');render();connect(++generation);};
+    node('research-live-start').onclick=()=>{if(active)return;if(typeof window.thetaLiveStreamRequest!=='function'){text('Open Admin and Unlock Admin first.');render();return;}symbol=node('research-symbol')?.value||'nifty';rows=new Map();points=[];retries=0;busySince=0;retryDelay=2500;active=true;window.thetaSessionRefresh?.();lastFrame=Date.now();text('Connecting…');render();connect(++generation);};
     node('research-live-stop').onclick=window.thetaLiveStop;render();
   };
   setInterval(()=>{if(active&&lastFrame&&Date.now()-lastFrame>(connected?15000:120000)){text('Feed stalled · reconnecting');stalled=true;lastFrame=Date.now();controller?.abort();}render();},2000);
