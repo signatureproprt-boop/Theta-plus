@@ -49,7 +49,7 @@ def test_foundation_ui_and_identity(app):
     assert all(text not in page for text in ('page-room','Strategy lab','Trade planner','/static/room.js','/static/markets.js'))
     assert c.get('/health-check').json()['version']==VERSION
     status=c.get('/api/status').json()
-    assert status['analysis_state']=='NOT_IMPLEMENTED' and status['saved_data']=='RETAINED'
+    assert status['analysis_state']=='READ_ONLY_RESEARCH_UNVALIDATED' and status['saved_data']=='RETAINED'
     assert status['execution']=='NO_BROKER_EXECUTION'
     assert c.get('/api/archive/credential_status').status_code==404
 

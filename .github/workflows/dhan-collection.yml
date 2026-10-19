@@ -20,6 +20,6 @@ jobs:
           node-version: '22'
       - run: python -m pip install -r live-app/requirements.lock.txt
       - run: PYTHONPATH=live-app python -m pytest -q live-app/tests
-      - run: node --test live-app/tests/collection-ui.test.cjs
-      - run: node --check live-app/static/collection.js && node --check live-app/static/app.js && node --check live-app/static/token-admin.js
+      - run: node --test live-app/tests/collection-ui.test.cjs live-app/tests/research-ui.test.cjs
+      - run: node --check live-app/static/research.js && node --check live-app/static/collection.js && node --check live-app/static/app.js && node --check live-app/static/token-admin.js
       - run: bash -n live-app/deploy/release-existing.sh
