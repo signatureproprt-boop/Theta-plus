@@ -5,3 +5,4 @@ pytest>=8,<10
 google-cloud-storage>=3,<4
 google-cloud-secret-manager>=2,<3
 websockets>=15,<16
+dhanhq==2.3.0

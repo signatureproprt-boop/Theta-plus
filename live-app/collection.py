@@ -412,20 +412,26 @@ class Collector:
         """One instrument, ten-second binary capture. Never persists auth URL."""
         from urllib.parse import urlencode
         import websockets
+        from sdk_feeds import make_codec,decode_packet,feed_info
         family=task['family'];item=task['item']
+        instruments=task.get('batch',[item])
+        codec=await asyncio.to_thread(make_codec,self.provider.credentials,family,instruments)
         params=urlencode({'version':'2','token':self.provider.credentials.token(),
                           'clientId':self.provider.credentials.client_id,'authType':'2'})
         host=('wss://api-feed.dhan.co?' if family=='live' else
               'wss://depth-api-feed.dhan.co/twentydepth?' if family=='depth20' else
-              'wss://full-depth-api.dhan.co/twohundreddepth?')
-        instruments=task.get('batch',[item])
-        body=({'RequestCode':23,'ExchangeSegment':item['segment'],'SecurityId':item['security_id']}
-              if family=='depth200' else {'RequestCode':21 if family=='live' else 23,'InstrumentCount':len(instruments),
-              'InstrumentList':[{'ExchangeSegment':i['segment'],'SecurityId':i['security_id']} for i in instruments]})
+              'wss://full-depth-api.dhan.co/?')
+        # Record the official SDK-generated subscription, without auth URLs.
+        subscriptions=[]
+        class SubscriptionSocket:
+            async def send(self,packet):subscriptions.append(json.loads(packet))
+        codec.ws=SubscriptionSocket()
+        await codec.subscribe_instruments()
+        body={'subscriptions':subscriptions}
         frames=[];started=now();total_bytes=0;truncated=False
         try:
             async with websockets.connect(host+params,open_timeout=10,close_timeout=2,max_size=2**20) as ws:
-                await ws.send(json.dumps(body))
+                for subscription in subscriptions:await ws.send(json.dumps(subscription))
                 deadline=time.monotonic()+10
                 while time.monotonic()<deadline and len(frames)<1000:
                     try:packet=await asyncio.wait_for(ws.recv(),max(.01,deadline-time.monotonic()))
@@ -447,7 +453,12 @@ class Collector:
                             if size<minimum or size>len(part):raise ProviderError('Invalid live feed packet length')
                             code=part[offset];security_id=str(int.from_bytes(part[4:8],'little'))
                             if code in ((1,2,4,5,6,8) if family=='live' else (41,51)):
-                                observations.append({'security_id':security_id,'packet_code':code})
+                                observation={'security_id':security_id,'packet_code':code}
+                                try:
+                                    decoded=decode_packet(codec,part[:size])
+                                    if decoded is not None:observation['decoded']=decoded
+                                except Exception:observation['decode_status']='SDK_DECODE_FAILED_RAW_RETAINED'
+                                observations.append(observation)
                             position+=size
                         frames.append({'received_at':now(),'binary_base64':base64.b64encode(packet).decode(),'observations':observations})
                     else:raise ProviderError('Unexpected text response from binary market feed')
@@ -455,7 +466,7 @@ class Collector:
         except Exception:
             # Exceptions can contain the credential-bearing URL; never propagate.
             raise ProviderError('Live feed unavailable; check token, entitlement and market session') from None
-        return {'endpoint':family,'request':body,'raw':{'frames':frames},
+        return {'endpoint':family,'request':body,'raw':{'frames':frames},**feed_info(family),
                 'started_at':started,'received_at':now(),'format':'Dhan binary frames, base64 encoded',
                 'capture_truncated':truncated or len(frames)>=1000,
                 'freshness':'Receipt only; exchange timestamps not decoded. This is a bounded sample, not continuous recording.'}

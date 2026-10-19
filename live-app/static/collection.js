@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  let active = null, running = false, pumping = false;
+  let active = null, running = false, pumping = false, background = false;
   const families = ['daily','intraday','rolling','chain','quotes','live','depth20','depth200'];
   const labels = {daily:'Daily history',intraday:'Intraday history',rolling:'Expired options',chain:'All active expiries / chains',quotes:'Quote snapshots',live:'Live feed samples',depth20:'20-level depth samples',depth200:'200-level depth samples'};
   const get = async path => {
@@ -23,6 +23,7 @@
       <p>Open <button class="button secondary" data-go="admin">Admin</button> and unlock with your existing password to manage collection.</p>
       <button class="button" id="catalogue-refresh">Refresh full instrument catalogue</button>
       <button class="button secondary" id="collection-profile">Check subscription / segments</button><button class="button secondary" id="collection-refresh">Refresh progress</button>
+      <div id="collection-engine" role="status">Checking data engine…</div>
       <div id="catalogue-status" role="status">Catalogue not loaded.</div>
       <form id="collection-plan"><div class="form-grid">
         <label class="field">History from (IST)<input type="date" id="collect-start" value="${start}" required></label>
@@ -38,7 +39,7 @@
       <article class="card collection-card"><div class="card-head"><h2>Collection progress</h2></div><div class="card-body">
       <div id="collection-jobs"></div><button class="button secondary" id="collection-more" hidden>More jobs</button>
       <div id="collection-current" aria-live="polite">Choose a job to see progress.</div>
-      <p>Keep this page open to run batches. Closing it stops further requests; checkpoints remain saved. Resume continues from the checkpoint after a restart or token update.</p>
+      <p id="collection-runner-help">Checking background worker. Saved checkpoints survive a restart or token update.</p>
       <button class="button" id="collection-resume">Resume selected job</button>
       <button class="button secondary" id="collection-pause">Pause</button>
       <button class="button secondary" id="collection-skip">Record blocked item and continue</button><button class="button secondary" id="collection-results">View results</button>
@@ -56,7 +57,10 @@
     <p>${esc(job.message)}</p><p>Current item: ${esc(job.current_item ? job.current_item.family+' / '+job.current_item.symbol+' / '+job.current_item.segment+' / '+job.current_item.from+' → '+job.current_item.to : '—')}</p><p>Updated: ${esc(job.updated_at)}</p>`;
   }
   async function refresh(append=false) {
-    const [cat,list]=await Promise.all([get('catalogue'),get('jobs'+(append && jobCursor?'?after='+encodeURIComponent(jobCursor):''))]);
+    const [cat,list,engine]=await Promise.all([get('catalogue'),get('jobs'+(append && jobCursor?'?after='+encodeURIComponent(jobCursor):'')),get('engine')]);
+    background=!!engine.worker?.configured;
+    $('#collection-engine').textContent='Official DhanHQ-py '+(engine.sdk?.version || 'unavailable')+' · '+(background?'Cloud worker configured':'Browser runner');
+    $('#collection-runner-help').textContent=background?'Resume starts collection on the server. You may close this page; reopen and refresh to see progress. Token and request errors stop at the saved checkpoint.':'Keep this page open to run batches. Closing it stops further requests; checkpoints remain saved.';
     $('#catalogue-status').textContent=cat.rows ? `${cat.rows.toLocaleString()} catalogue entries · ${cat.fetched_at} · Review reasons: ${JSON.stringify(cat.review_reasons)}` : 'Refresh the instrument catalogue before creating a plan.';
     const links=list.jobs.map(j=>`<button type="button" class="button secondary" data-collection-job="${esc(j.id)}">${esc(j.created_at.slice(0,16))} · ${esc(j.state)} · ${esc(j.items_assessed)} items</button>`).join('');
     if (append) $('#collection-jobs').insertAdjacentHTML('beforeend',links); else $('#collection-jobs').innerHTML=links || 'No collection jobs yet.';
@@ -103,7 +107,7 @@
       if (b.id==='collection-refresh') await refresh();
       if (b.id==='collection-more') await refresh(true);
       if (b.dataset.collectionJob) {running=false;active=b.dataset.collectionJob;showJob(await get('jobs/'+active));$('#collection-result-list').textContent='';$('#collection-results-more').hidden=true;}
-      if (b.id==='collection-resume') {if (!active) throw Error('Select a job first.');showJob(await write('jobs/'+active+'/resume'));running=true;void pump();}
+      if (b.id==='collection-resume') {if (!active) throw Error('Select a job first.');const job=await write('jobs/'+active+'/resume');showJob(job);if(job.runner?.mode==='cloud_run_job'){background=true;running=false;feedback('Server collection started. You may close this page.');}else{running=true;void pump();}}
       if (b.id==='collection-pause') {running=false;if(active)showJob(await write('jobs/'+active+'/pause'));}
       if (b.id==='collection-results') await results();
       if (b.id==='collection-results-more') await results(true);
@@ -127,5 +131,6 @@
     finally {b.disabled=false;}
   });
   window.addEventListener('hashchange',()=>{if(location.hash!=='#collect')running=false;else refresh().catch(e=>feedback(e.message));});
+  setInterval(()=>{if(background && active && location.hash==='#collect')get('jobs/'+active).then(showJob).catch(e=>feedback(e.message));},15000);
   panel(); if(location.hash==='#collect')refresh().catch(e=>feedback(e.message));
 })();

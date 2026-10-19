@@ -214,3 +214,17 @@ def test_setup_normalizes_secret_access_resource_path(tmp_path,monkeypatch):
     assert '--secret=theta-dhan-access-token' in calls[1] and '--project=theta-pluse' in calls[1]
     assert not any('--secret=projects/' in arg for args in calls for arg in args)
     assert json.loads(dest.read_text())=={'client_id':'client-value','token':'test-token'}
+
+
+def test_worker_dispatch_stays_behind_existing_admin_authorization(app,monkeypatch):
+    jid='a'*32
+    app.state.store.put_document('jobs/'+jid,{'id':jid,'state':'paused'},0)
+    calls=[]
+    monkeypatch.setenv('THETA_COLLECTION_WORKER','projects/theta-pluse/locations/asia-south1/jobs/theta-plus-collector')
+    monkeypatch.setattr(server,'launch_worker',lambda store:calls.append(True) or {'mode':'cloud_run_job','state':'starting'})
+    c=TestClient(app)
+    assert c.post('/api/collection/jobs/'+jid+'/resume',json={}).status_code==403
+    assert not calls
+    response=c.post('/api/collection/jobs/'+jid+'/resume',json={},headers={'X-Theta-Admin-Password':'fixture-admin-password'})
+    assert response.status_code==200 and response.json()['runner']['mode']=='cloud_run_job' and calls==[True]
+    assert c.get('/api/collection/engine').json()['sdk']['version']=='2.3.0'

@@ -4,7 +4,7 @@ from collections import Counter
 import time
 import math
 from runtime import IST
-from provider import ProviderError
+from provider import ProviderError,SDK_VERSION
 
 INDEX_IDS={'nifty':13}  # Other IDs are resolved from the current Dhan instrument master.
 FIELDS=('timestamp','open','high','low','close','volume')
@@ -70,7 +70,7 @@ async def fetch_history(provider,store,*,kind,index,start,end,strike='ATM',side=
     else:raise ValueError('Unsupported historical data type')
     raw=await provider.post(endpoint,body)
     count=candle_count(raw) if kind in ('index','future','daily') else option_count(raw,side)
-    metadata={'provider':'DhanHQ','endpoint':endpoint,'kind':kind,'index':index,'from':start.isoformat(),
+    metadata={'provider':'DhanHQ','sdk':'dhanhq','sdk_version':SDK_VERSION,'endpoint':endpoint,'kind':kind,'index':index,'from':start.isoformat(),
               'security_id':str(sid),
               'to_exclusive':end.isoformat(),'strike':strike if kind=='expired_option' else None,
               'side':side if kind=='expired_option' else None,'expiry_flag':expiry_flag if kind=='expired_option' else None,
@@ -101,7 +101,7 @@ async def fetch_chain(provider,store,index,instrument):
     raw=await provider.post('optionchain',{'UnderlyingScrip':sid,'UnderlyingSeg':'IDX_I','Expiry':expiry})
     oc=(raw.get('data') or {}).get('oc')
     if not isinstance(oc,dict):raise ProviderError('Option chain response has no strike map')
-    metadata={'provider':'DhanHQ','kind':'live_option_chain','index':index,'expiry':expiry,
+    metadata={'provider':'DhanHQ','sdk':'dhanhq','sdk_version':SDK_VERSION,'kind':'live_option_chain','index':index,'expiry':expiry,
               'strikes':len(oc),'fetched_at':datetime.now(timezone.utc).isoformat(),
               'time_basis':'server receipt; no exchange quote timestamp in chain response'}
     record_id=store.add('dhan_chain',{'metadata':metadata,'raw':raw})

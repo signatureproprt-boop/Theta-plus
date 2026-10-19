@@ -92,19 +92,27 @@ class Credentials:
 
 
 def test_provider_timeout_is_typed_and_bounded(monkeypatch):
-    original=httpx.AsyncClient
-    def handler(request):
-        assert request.extensions['timeout']['read']==60
-        raise httpx.ReadTimeout('sensitive URL omitted',request=request)
-    monkeypatch.setattr(httpx,'AsyncClient',lambda **kw:original(transport=httpx.MockTransport(handler),**kw))
-    with pytest.raises(ProviderError) as exc:asyncio.run(Dhan(Credentials()).post('charts/historical',{}))
+    import requests
+    def handler(self,method,url,**kw):
+        assert kw['timeout']==(10,60) and kw['allow_redirects'] is False
+        raise requests.ReadTimeout('sensitive URL omitted')
+    monkeypatch.setattr(requests.Session,'request',handler)
+    with pytest.raises(ProviderError) as exc:asyncio.run(Dhan(Credentials()).post('charts/historical',daily_body()))
     assert exc.value.code=='TIMEOUT' and exc.value.status==504
     assert 'sensitive' not in str(exc.value)
 
 
+def daily_body():
+    return {'securityId':'13','exchangeSegment':'IDX_I','instrument':'INDEX','fromDate':'2026-10-12','toDate':'2026-10-17'}
+
+
 def test_provider_reason_redacts_credentials(monkeypatch):
-    original=httpx.AsyncClient
-    response={'errorCode':'DH-905','errorMessage':'Bad fixture-token fixture-client'}
-    monkeypatch.setattr(httpx,'AsyncClient',lambda **kw:original(transport=httpx.MockTransport(lambda r:httpx.Response(400,json=response)),**kw))
-    with pytest.raises(ProviderError) as exc:asyncio.run(Dhan(Credentials()).post('charts/historical',{}))
+    import requests
+    def handler(self,method,url,**kw):
+        r=requests.Response();r.status_code=400
+        r._content=json.dumps({'errorCode':'DH-905','errorMessage':'Bad fixture-token fixture-client'}).encode()
+        return r
+    monkeypatch.setattr(requests.Session,'request',handler)
+    with pytest.raises(ProviderError) as exc:asyncio.run(Dhan(Credentials()).post('charts/historical',daily_body()))
     assert 'Bad' in str(exc.value) and 'fixture' not in str(exc.value)
+    assert exc.value.code=='DH-905' and exc.value.status==400
