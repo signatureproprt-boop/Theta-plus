@@ -55,11 +55,16 @@ def running_jobs(store):
 
 async def run_worker(collector,max_seconds=23*3600):
     store=collector.store;owner=uuid.uuid4().hex;claimed=False
+    execution=os.environ.get('CLOUD_RUN_EXECUTION')
     def claim(old):
         nonlocal claimed
         claimed=False
-        if old and old.get('until',0)>time.time():return old
-        claimed=True;return {'owner':owner,'until':time.time()+600,'heartbeat':now(),'state':'running'}
+        # Cloud Run starts a retry only after the previous attempt has stopped.
+        # Reclaim that execution's stale lease after a hard kill; other executions
+        # remain excluded. The deployed job has exactly one task.
+        same_execution=bool(execution and old and old.get('execution')==execution)
+        if old and old.get('until',0)>time.time() and not same_execution:return old
+        claimed=True;return {'owner':owner,'execution':execution,'until':time.time()+600,'heartbeat':now(),'state':'running'}
     await asyncio.to_thread(replace,store,'control/worker',claim)
     if not claimed:return
     started=time.monotonic()

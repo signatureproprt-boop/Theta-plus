@@ -135,3 +135,12 @@ def test_worker_deploy_manifest_uses_existing_identity_and_only_data_config():
     assert job['serviceAccountName']=='existing-sa'
     assert job['containers'][0]['args']==['worker.py']
     assert 'must-not-copy' not in json.dumps(job)
+
+
+def test_cloud_run_retry_reclaims_own_hard_killed_attempt(tmp_path,monkeypatch):
+    store=Store(tmp_path/'s.db')
+    monkeypatch.setenv('CLOUD_RUN_EXECUTION','execution-1')
+    store.put_document('control/worker',{'owner':'killed-attempt','execution':'execution-1','until':time.time()+600},0)
+    asyncio.run(worker.run_worker(SimpleNamespace(store=store),max_seconds=10))
+    value=store.document('control/worker')[0]
+    assert value['owner']!='killed-attempt' and value['state']=='idle' and value['until']==0
