@@ -228,3 +228,17 @@ def test_worker_dispatch_stays_behind_existing_admin_authorization(app,monkeypat
     response=c.post('/api/collection/jobs/'+jid+'/resume',json={},headers={'X-Theta-Admin-Password':'fixture-admin-password'})
     assert response.status_code==200 and response.json()['runner']['mode']=='cloud_run_job' and calls==[True]
     assert c.get('/api/collection/engine').json()['sdk']['version']=='2.3.0'
+
+
+def test_token_edit_reuses_permanent_client_id_when_not_resubmitted(app,monkeypatch):
+    events=[]
+    monkeypatch.setenv('THETA_DHAN_CREDENTIALS_SECRET','projects/test/secrets/pair')
+    monkeypatch.setattr(server.DhanCredentials,'client_id',property(lambda self:'fixed-client'))
+    async def check(token,client):
+        events.append(('check',client));return {'status':'AUTHENTICATED'}
+    monkeypatch.setattr(server,'check_token',check)
+    monkeypatch.setattr(server.DhanCredentials,'save_pair',lambda self,client,token:events.append(('save',client)))
+    response=TestClient(app).post('/api/admin/dhan/save',json={'token':'candidate-'+'x'*30},headers={'X-Theta-Admin-Password':'fixture-admin-password'})
+    assert response.status_code==200 and response.json()['saved']
+    assert events==[('check','fixed-client'),('save','fixed-client')]
+    assert 'candidate-' not in response.text

@@ -224,10 +224,12 @@ def create_app(db_path=None):
     @app.post('/api/admin/dhan/save')
     async def dhan_save(payload:DhanConnectionInput,request:Request):
         require_admin(request)
-        if not payload.client_id or not payload.token:raise HTTPException(422,'Enter Client ID and a new token')
+        try:client_id=payload.client_id or credential_source.client_id
+        except CredentialError as exc:raise HTTPException(503,str(exc)) from None
+        if not client_id or not payload.token:raise HTTPException(422,'Enter a new token; Client ID is needed only for the first setup')
         if not credential_source.pair_secret:raise HTTPException(503,'Admin connection storage needs one-time setup')
-        result=await check_token(payload.token,payload.client_id)
-        try:credential_source.save_pair(payload.client_id,payload.token)
+        result=await check_token(payload.token,client_id)
+        try:credential_source.save_pair(client_id,payload.token)
         except CredentialError as exc:raise HTTPException(503,str(exc)) from None
         result['checked_at']=datetime.now(timezone.utc).isoformat()
         store.add('credential_status',result)
