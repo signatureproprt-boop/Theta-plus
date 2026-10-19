@@ -70,7 +70,7 @@ def activate_worker(before,expected_image=None,candidate=None):
     gcloud('run','services','update-traffic',SERVICE,'--to-revisions='+name+'=100','--quiet')
     try:
         from verify_rollout import wait_for_health
-        wait_for_health(before['status']['url'],'theta-foundation-3.5.0',name)
+        wait_for_health(before['status']['url'],'theta-foundation-3.6.0',name)
     except Exception:
         gcloud('run','services','update-traffic',SERVICE,'--to-revisions='+rollback,'--quiet')
         raise RuntimeError('Worker revision verification failed; previous traffic restored') from None
