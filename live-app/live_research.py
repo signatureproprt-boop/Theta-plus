@@ -18,6 +18,7 @@ from collection import replace
 from dhan_data import fetch_chain
 from sdk_feeds import make_codec,decode_packet,SEGMENTS
 from research import number,stamp
+from runtime import IST
 
 LOG=logging.getLogger('theta.private-live-socket')
 LOG.handlers=[logging.NullHandler()];LOG.propagate=False;LOG.disabled=True
@@ -70,7 +71,7 @@ def observation(codec,packet,instruments,received):
             'time_basis':'LTT is last trade time; depth has server receipt only',
             'signal_eligible':False}
 
-async def prepare(board,provider,store,symbol):
+async def prepare(board,provider,store,symbol,contract_id=''):
     await board.catalog()
     instruments=[]
     for key in ('nifty','banknifty','india_vix','nifty_future','banknifty_future'):
@@ -87,7 +88,7 @@ async def prepare(board,provider,store,symbol):
         strikes=sorted((number(k),k) for k in pairs if number(k) is not None)
         if spot and strikes:
             nearest=min(range(len(strikes)),key=lambda i:abs(strikes[i][0]-spot))
-            for strike,key in strikes[max(0,nearest-2):nearest+3]:
+            for strike,key in strikes[max(0,nearest-5):nearest+6]:
                 for leg,side in (('ce','CE'),('pe','PE')):
                     raw=pairs[key].get(leg) or {};sid=str(raw.get('security_id',''))
                     master=board.options.get(sid)
@@ -98,6 +99,12 @@ async def prepare(board,provider,store,symbol):
     except Exception:
         # Index stream can still operate if option entitlement/expiry lookup fails.
         pass
+    # Keep an explicitly selected exact contract subscribed even outside the
+    # current ATM window. Master identity, underlying and expiry must match.
+    selected=board.options.get(contract_id)
+    if selected and selected.get('underlying')==symbol and selected.get('expiry','')>=now().astimezone(IST).date().isoformat() and not any(i['security_id']==contract_id and i.get('segment')=='NSE_FNO' for i in instruments):
+        instruments.append({**selected,'key':contract_id,'segment':'NSE_FNO','label':f"{symbol.upper()} {selected['strike']:g} {selected['side']}",
+                            'role':'option','underlying':symbol,'identity_verified':True})
     return instruments
 
 def claim(store):
@@ -116,7 +123,7 @@ def release(store,owner):
 
 def event(data):return 'data: '+json.dumps(data,allow_nan=False,separators=(',',':'))+'\n\n'
 
-async def stream(provider,store,board,symbol,request):
+async def stream(provider,store,board,symbol,request,contract_id=''):
     owner=None
     try:
         deadline=time.monotonic()+240
@@ -125,7 +132,7 @@ async def stream(provider,store,board,symbol,request):
         with anyio.CancelScope(shield=True):
             owner=await anyio.to_thread.run_sync(claim,store)
         yield event({'type':'status','state':'CONNECTING','received_at':now().isoformat()})
-        instruments=await prepare(board,provider,store,symbol)
+        instruments=await prepare(board,provider,store,symbol,contract_id)
         codec=await asyncio.to_thread(make_codec,provider.credentials,'live',instruments)
         lookup={(SEGMENTS[i['segment']],str(i['security_id'])):i for i in instruments}
         params=urlencode({'version':'2','token':provider.credentials.token(),'clientId':provider.credentials.client_id,'authType':'2'})

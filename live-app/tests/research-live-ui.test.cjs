@@ -62,3 +62,12 @@ test('busy retries expire instead of waiting forever on another active tab',asyn
   assert.equal(e.node('research-live-start').disabled,false);
   assert.match(e.node('research-live-state').textContent,/Stop that tab/);
 });
+
+test('option batches reach the selected-option bridge and new connection clears old observations',async()=>{
+  const tick={key:'123',underlying:'nifty',segment:'NSE_FNO',security_id:'123',role:'option',identity_verified:true,ltp:100};
+  const e=environment([{type:'batch',ticks:[tick],received_at:new Date().toISOString()}]);
+  let received=[],reset=0;e.context.window.thetaResearchLiveBatch=rows=>received.push(...rows);e.context.window.thetaResearchLiveReset=()=>reset++;
+  e.node('research-live-start').onclick();await e.flush();
+  assert.equal(reset,1);assert.equal(received[0].security_id,'123');
+  e.context.window.thetaLiveStop();
+});
