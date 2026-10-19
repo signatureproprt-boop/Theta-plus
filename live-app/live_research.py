@@ -4,6 +4,7 @@ No orders. No credential-bearing URLs/errors are emitted or persisted. LTT is
 last-trade time; receipt of depth is NOT proof of exchange quote freshness.
 """
 import asyncio
+import anyio
 import json
 import logging
 import struct
@@ -107,7 +108,7 @@ def claim(store):
         if old and old.get('until',0)>time.time():return old
         claimed=True;return {'owner':owner,'until':time.time()+300}
     replace(store,'research/live-lease',acquire)
-    if not claimed:raise HTTPException(409,'A live research stream is already open. Stop that tab or wait for its lease to expire.')
+    if not claimed:raise HTTPException(409,'A live research stream is already open. Waiting for its lease to release; Stop cancels this retry.')
     return owner
 
 def release(store,owner):
@@ -119,7 +120,10 @@ async def stream(provider,store,board,symbol,request):
     owner=None
     try:
         deadline=time.monotonic()+240
-        owner=await asyncio.to_thread(claim,store)
+        # ASGI disconnects use cancellation scopes. Complete ownership assignment
+        # before cancellation can enter; otherwise the claimed owner is lost.
+        with anyio.CancelScope(shield=True):
+            owner=await anyio.to_thread.run_sync(claim,store)
         yield event({'type':'status','state':'CONNECTING','received_at':now().isoformat()})
         instruments=await prepare(board,provider,store,symbol)
         codec=await asyncio.to_thread(make_codec,provider.credentials,'live',instruments)
@@ -146,8 +150,12 @@ async def stream(provider,store,board,symbol,request):
             yield event({'type':'status','state':'RENEW_CONNECTION','received_at':now().isoformat()})
     except asyncio.CancelledError:raise
     except HTTPException as exc:
-        yield event({'type':'status','state':'UNAVAILABLE','message':exc.detail})
+        yield event({'type':'status','state':'STREAM_BUSY' if exc.status_code==409 else 'UNAVAILABLE',
+                     'retry_after_seconds':5 if exc.status_code==409 else None,'message':exc.detail})
     except Exception:
         yield event({'type':'status','state':'UNAVAILABLE','message':'Dhan live connection unavailable. Check saved token, data entitlement and market session.'})
     finally:
-        if owner:await asyncio.to_thread(release,store,owner)
+        if owner:
+            # Keep cleanup alive under Starlette/AnyIO's disconnect cancellation.
+            with anyio.CancelScope(shield=True):
+                await anyio.to_thread.run_sync(release,store,owner)

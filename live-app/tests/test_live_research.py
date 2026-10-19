@@ -115,3 +115,51 @@ def test_live_route_requires_existing_admin_and_rejects_unknown_symbols(tmp_path
     c=TestClient(server.create_app(tmp_path/'app.db'))
     assert c.post('/api/research/live',json={'symbol':'nifty'}).status_code==503
     assert c.post('/api/research/live',json={'symbol':'arbitrary-security'}).status_code==422
+
+def test_asgi_disconnect_cancellation_releases_owned_lease(tmp_path,monkeypatch):
+    import anyio
+    s=Store(tmp_path/'cancel.db')
+    async def run():
+        started=anyio.Event()
+        async def prepare(*args):
+            started.set()
+            await anyio.sleep_forever()
+        monkeypatch.setattr(live,'prepare',prepare)
+        async def consume():
+            async for _ in live.stream(None,s,None,'nifty',None):pass
+        async with anyio.create_task_group() as group:
+            group.start_soon(consume)
+            await started.wait()
+            assert s.document('research/live-lease')[0]
+            group.cancel_scope.cancel()
+        assert s.document('research/live-lease')[0] is None
+    anyio.run(run)
+
+
+def test_cancel_during_claim_does_not_orphan_owner(tmp_path,monkeypatch):
+    import anyio
+    import threading
+    s=Store(tmp_path/'claim-cancel.db');claimed=threading.Event();finish=threading.Event()
+    original=live.claim
+    def slow_claim(store):
+        owner=original(store);claimed.set();finish.wait(timeout=3);return owner
+    monkeypatch.setattr(live,'claim',slow_claim)
+    async def prepare(*args):await anyio.sleep_forever()
+    monkeypatch.setattr(live,'prepare',prepare)
+    async def run():
+        async def consume():
+            async for _ in live.stream(None,s,None,'nifty',None):pass
+        async with anyio.create_task_group() as group:
+            group.start_soon(consume)
+            await anyio.to_thread.run_sync(claimed.wait)
+            group.cancel_scope.cancel();finish.set()
+        assert s.document('research/live-lease')[0] is None
+    anyio.run(run)
+
+
+def test_busy_stream_is_retryable_without_stealing_owner(tmp_path):
+    s=Store(tmp_path/'busy.db');owner=live.claim(s)
+    async def run():return [json.loads(v.removeprefix('data: ')) async for v in live.stream(None,s,None,'nifty',None)]
+    values=asyncio.run(run())
+    assert values[0]['state']=='STREAM_BUSY' and values[0]['retry_after_seconds']==5
+    assert s.document('research/live-lease')[0]['owner']==owner

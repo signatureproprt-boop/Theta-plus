@@ -194,3 +194,9 @@ Two observable source issues were found. Current-session response had 374/375 mi
 Exact futures identities failed because real master SYMBOL_NAME values include expiry: NIFTY-Oct2026-FUT (48704) and BANKNIFTY-Oct2026-FUT (48699), expiry 2026-10-27 in the retrieved source. Resolve FUTIDX by exact UNDERLYING_SYMBOL plus exchange, instrument and segment, then choose the front non-expired expiry; no IDs are hardcoded. A regression fixture uses these actual vendor-shaped names and rejects wrong segments, other underlyings and expired contracts.
 
 The LCTMCI / IDX_I security ID 54 diagnostic matched one current master row. Its recent daily request returned DH-907 while its recent one-minute request returned 1,875 rows. The diagnostic conclusion now distinguishes this endpoint-specific result. Its original five-year daily request and historical checkpoint remain unresolved; no daily data was fabricated from intraday bars or marked complete.
+
+### 3.4.2 — reconnect and disconnect cleanup
+
+The stream claim and owner release are shielded from ASGI/AnyIO disconnect cancellation, including cancellation while the durable claim is being assigned. A busy stream now returns STREAM_BUSY; the browser retries every five seconds for at most 330 seconds and keeps Stop available. It never revokes another tab’s lease. Late responses from a stopped generation are cancelled before parsing and cannot overwrite the new stream. Stop/restart, provider entitlement and market freshness remain distinct states.
+
+Production 3.4.1 checks confirmed 375/375 closed minutes with zero gaps for both NIFTY and BANKNIFTY on 19 October 2026; current futures expiry resolved to 27 October. After-hours data remained stale and futures VWAP was hidden. Daily history DH-907, exchange quote time, events/breadth and exact-contract backtest validation remain unresolved; this release does not bypass those gates.
