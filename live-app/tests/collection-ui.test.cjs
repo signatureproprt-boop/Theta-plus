@@ -39,10 +39,12 @@ function environment(runState='completed',options={}) {
       if(url==='/api/dhan/collected?kind=dhan_chain' && options.chainPromise)await options.chainPromise;
       if(url==='/api/dhan/collected?kind=dhan_history')data={dhan_history:options.history||[]};
       if(url==='/api/dhan/collected?kind=dhan_chain')data={dhan_chain:[]};
-      if(url==='/api/status')data={dhan_configured:false,token_screen_enabled:true};
+      if(url==='/api/status')data={dhan_configured:options.savedToken!==false,token_screen_enabled:true};
       if(url==='/api/dhan/collected')data={};
       if(url==='/api/admin/check')data={authorised:true};
-      if(url==='/api/admin/dhan/settings')data={client_id:'fixture',editable:true};
+      if(url==='/api/admin/dhan/save')data={saved:true,status:'AUTHENTICATED',token_validity_reported:'20/10/2026 00:49',data_plan:'Active'};
+      if(url==='/api/admin/dhan/test')data={saved:false,status:'AUTHENTICATED'};
+      if(url==='/api/admin/dhan/settings')data={client_id:'fixture',editable:true,token_saved:options.savedToken!==false};
       if(url==='/api/collection/engine')data={sdk:{version:'2.3.0'},worker:{configured:!!options.background}};
       if(url==='/api/collection/catalogue')data={rows:2,fetched_at:'now',review_reasons:{}};
       if(url==='/api/collection/jobs' && !opts.method)data={jobs:[],next_cursor:null};
@@ -133,4 +135,46 @@ test('server worker Resume does not start a browser pump',async()=>{
   assert.equal(e.calls.filter(([url])=>url.endsWith('/run')).length,0);
   assert.match(e.element('collection-feedback').textContent,/may close this page/);
   assert.match(e.element('collection-engine').textContent,/DhanHQ-py 2.3.0/);
+});
+
+
+test('saved token stays closed after unlock and saved connection test sends no candidate',async()=>{
+  const e=environment();await e.flush();
+  e.element('token-admin-password').value='fixture-admin';await e.click('admin-signin');
+  assert.equal(e.element('dhan-token-form').hidden,true);
+  assert.equal(e.element('edit-dhan-token').disabled,false);
+  assert.equal(e.element('dhan-token').disabled,true);
+  await e.click('test-dhan-connection');
+  const call=e.calls.find(([url])=>url==='/api/admin/dhan/test');
+  assert.equal(call[1].body,'{}');
+  assert.equal(e.element('dhan-token-form').hidden,true);
+});
+
+test('Edit token is explicit; cancel clears candidate and preserves the saved connection',async()=>{
+  const e=environment();await e.flush();
+  e.element('token-admin-password').value='fixture-admin';await e.click('admin-signin');
+  await e.click('edit-dhan-token');
+  assert.equal(e.element('dhan-token-form').hidden,false);
+  assert.equal(e.element('dhan-client-id').disabled,true);
+  assert.equal(e.element('dhan-client-id').value,'fixture');
+  e.element('dhan-token').value='candidate-not-saved';await e.click('cancel-token-edit');
+  assert.equal(e.element('dhan-token-form').hidden,true);
+  assert.equal(e.element('dhan-token').value,'');
+  assert.equal(e.calls.some(([url])=>url==='/api/admin/dhan/save'),false);
+});
+
+test('save clears token entry, closes editor and keeps Admin unlocked after refresh',async()=>{
+  const e=environment();await e.flush();
+  e.element('token-admin-password').value='fixture-admin';await e.click('admin-signin');
+  await e.click('edit-dhan-token');
+  e.element('dhan-token').value='candidate-token-at-least-twenty-chars';
+  await e.context.window.thetaSaveDhanToken();await e.flush();
+  const call=e.calls.find(([url])=>url==='/api/admin/dhan/save');
+  assert.equal(JSON.parse(call[1].body).client_id,'fixture');
+  assert.equal(e.element('dhan-token').value,'');
+  assert.equal(e.element('dhan-token-form').hidden,true);
+  assert.equal(e.element('edit-dhan-token').disabled,false);
+  await e.click('refresh');
+  assert.equal(e.element('dhan-token-form').hidden,true);
+  assert.equal(e.element('edit-dhan-token').disabled,false);
 });
