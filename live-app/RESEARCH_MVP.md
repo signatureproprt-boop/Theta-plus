@@ -205,6 +205,16 @@ Production 3.4.1 checks confirmed 375/375 closed minutes with zero gaps for both
 
 All browser API bridges share response parsing and a per-tab rate-limit cooldown. A plain-text HTTP 429 (including proxy-generated Rate exceeded) is treated as throttling, respects Retry-After with a bounded fallback, and never automatically replays a write. HTML/empty/malformed responses produce safe actionable messages rather than JSON syntax exceptions. Failed initial public status reads keep credential state unknown instead of claiming one-time token setup is missing; prior loaded status is retained with an outage label. Admin credentials become active only after the authentication response succeeds, and HTTP 403 still locks Admin. This handles a throttled response; it does not certify the source of infrastructure throttling or remove provider quotas.
 
+### 3.6.0 — unified Trading Room
+
+- Trading Room combines provider candle chart with paired CE / strike / PE rows from one saved chain snapshot. Full-chain PCR and snapshot provenance remain visible; live observations are separate.
+- Selecting a contract stays on the current page and recomputes setup checks with its security ID. Missing contracts retain identity while quote values become unavailable.
+- One selectable setup panel translates reason codes without changing rule conditions, candle intervals or validation gates. Technical codes remain expandable.
+- Room and Risk & Rules share one cost-aware risk form. Refreshes retain explicit assumptions; changing symbol/contract or editing assumptions invalidates the previous paper plan. In-flight risk responses cannot restore a plan after those changes.
+- Premium stop is explicit; underlying invalidation is never converted into an assumed option stop. Charges and provenance remain required, with no implicit current tariff.
+- Existing historical collection, broker execution restrictions and underlying-only replay remain unchanged. No option P&L or accuracy is certified by this layout change.
+- Local verification: 187 Python tests plus the UI suite; live visual verification requires deploying this release.
+
 ### 3.5.0 — collection continuation and participation context
 
 Collection defaults still stop on a rejected request. An explicit checkbox for new plans or `continue-rejected` Admin action for an existing request-review job records rejected items as failed / NOT_COLLECTED, retains task, provider error and dates, and enables continuation for other data. It never labels rejected data unsupported or complete. Token/permission errors retain their checkpoint; rate limits back off without becoming failed after three attempts. Pause before restoring stop-on-rejection policy. Collection claim/release is shielded against ASGI cancellation.

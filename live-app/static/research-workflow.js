@@ -11,6 +11,7 @@
     if(node('paper-use-plan'))node('paper-use-plan').onclick=()=>{location.hash='#paper';window.thetaResearchShow('paper');};
   }
   window.thetaPaperPlanReady=value=>{draft=value;planButton();};
+  window.thetaPaperPlanClear=()=>{draft=null;if(node('paper-plan-result'))node('paper-plan-result').textContent='';};
   async function loadPaper(){
     if(paperLoading)return;paperLoading=true;
     try{ledger=await window.thetaAdminRequest('research/paper/list',{});paperError='';}
@@ -41,7 +42,7 @@
     const aside=node('workflow-aside');if(aside){
       const ind=data?.indicators?.['5'];const future=context?.futures_vwap||data?.futures_context;const breadth=context?.breadth||data?.breadth;
       aside.innerHTML=`<h2>Decision checklist</h2><p class="research-help">5m RSI(14) ${fmt(ind?.rsi14)} · ADX(14) ${fmt(ind?.adx14)} · +DI ${fmt(ind?.plus_di)} / −DI ${fmt(ind?.minus_di)}</p><p class="research-help">${esc(context?.warmup_error?'Warm-up refresh: '+context.warmup_error:'')}</p><p class="research-help">${future?`Futures candle VWAP ${fmt(future.value)} · ${esc(future.state)} · expiry ${esc(future.expiry)}. ${esc(future.basis||future.reason)}`:'Futures candle VWAP: Start live to request current exact contract.'}</p><p class="research-help">Breadth: ${esc(breadth?.state||'NOT_CONNECTED')}${breadth?.fraction_up==null?'':` · advances ${breadth.advances} / declines ${breadth.declines} / unchanged ${breadth.unchanged}`}. Equal-count participation, not index weights.</p><div class="research-identity">${selected?`${fmt(selected.strike)} ${esc(selected.side)} · ${esc(selected.expiry)} · lot ${esc(selected.lot_size)}`:'Select an exact option in Options Analysis.'}</div><button class="button secondary" id="workflow-risk">Plan risk</button><p class="research-help">Missing events, breadth or quote time keep confirmation blocked. RSI, ADX and PCR are context, not an accuracy score.</p>`;
-      node('workflow-risk').onclick=()=>{location.hash='#risk';window.thetaResearchShow('risk');};
+      node('workflow-risk').onclick=()=>{if(current==='research'){node('research-risk')?.querySelector('input')?.focus();}else{location.hash='#risk';window.thetaResearchShow('risk');}};
       if(current==='quality'){
         const jobs=data?.collection?.jobs||[];
         aside.insertAdjacentHTML('beforeend',`<h2>Completion checks</h2><div class="table-wrap"><table class="research-table"><thead><tr><th>Check</th><th>Status / next requirement</th></tr></thead><tbody>${(data?.readiness||[]).map(r=>`<tr><td>${esc(r.item)}</td><td>${esc(r.state)}<br><small>${esc(r.next)}</small></td></tr>`).join('')}</tbody></table></div>`);
