@@ -69,6 +69,38 @@ def test_stream_failure_sanitizes_errors_and_releases_lease(tmp_path,monkeypatch
     assert 'UNAVAILABLE' in joined and 'never-expose' not in joined
     assert s.document('research/live-lease')[0] is None
 
+def test_stream_subscribes_emits_tick_and_cleans_up_provider_disconnect(tmp_path,monkeypatch):
+    s=Store(tmp_path/'stream.db');sent=[]
+    class Socket:
+        def __init__(self):self.frames=[ticker(),struct.pack('<BHBIH',50,10,0,13,805)]
+        async def __aenter__(self):return self
+        async def __aexit__(self,*args):pass
+        async def recv(self):return self.frames.pop(0)
+        async def send(self,value):sent.append(json.loads(value))
+    class Codec:
+        async def subscribe_instruments(self):await self.ws.send('{"RequestCode":21}')
+        def process_data(self,packet):return codec().process_data(packet)
+    class Credentials:
+        client_id='fixture-client'
+        def token(self):return 'fixture-token'
+    class Provider:credentials=Credentials()
+    class Request:
+        async def is_disconnected(self):return False
+    async def prepare(*args):return list(instruments().values())
+    monkeypatch.setattr(live,'prepare',prepare)
+    monkeypatch.setattr(live,'make_codec',lambda *args:Codec())
+    monkeypatch.setattr(live.websockets,'connect',lambda *args,**kwargs:Socket())
+    monkeypatch.setattr(live,'now',at)
+    async def run():return [json.loads(v.removeprefix('data: ')) async for v in live.stream(Provider(),s,None,'nifty',Request())]
+    values=asyncio.run(run())
+    assert sent==[{'RequestCode':21}]
+    assert any(v.get('state')=='CONNECTED_AWAITING_TICKS' for v in values)
+    tick=next(v['ticks'][0] for v in values if v.get('ticks'))
+    assert tick['trade_state']=='RECENT_TRADE' and tick['key']=='nifty'
+    assert values[-1]['state']=='PROVIDER_DISCONNECT'
+    assert 'fixture-token' not in json.dumps(values)
+    assert s.document('research/live-lease')[0] is None
+
 def test_live_route_requires_existing_admin_and_rejects_unknown_symbols(tmp_path,monkeypatch):
     monkeypatch.setenv('THETA_AUTH_MODE','public')
     for key in ('K_SERVICE','THETA_GCS_BUCKET','THETA_TOKEN_ADMIN_HASH'):monkeypatch.delenv(key,raising=False)
