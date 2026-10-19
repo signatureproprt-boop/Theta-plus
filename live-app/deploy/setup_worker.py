@@ -2,6 +2,7 @@
 
 Keeps the existing service, bucket and Dhan secrets. Does not read secret values.
 """
+import argparse
 import json
 import os
 from pathlib import Path
@@ -37,11 +38,45 @@ def job_spec(revision):
                            'resources':{'limits':{'cpu':'1','memory':'1Gi'}}}]}}}}}}
 
 
+def traffic(service):
+    return {t['revisionName']:t['percent'] for t in service['status']['traffic'] if t.get('percent',0)>0}
+
+
+def activate_worker(before,expected_image=None):
+    """Explicit traffic is pinned by release-existing.sh; env update doesn't move it."""
+    current=json.loads(gcloud('run','services','describe',SERVICE,'--format=json'))
+    name=current['status']['latestReadyRevisionName']
+    revision=json.loads(gcloud('run','revisions','describe',name,'--format=json'))
+    env={e['name']:e.get('value') for e in revision['spec']['containers'][0].get('env',[])}
+    if env.get('THETA_COLLECTION_WORKER')!=RESOURCE:raise ValueError('Latest ready revision has no expected worker configuration; traffic unchanged')
+    image=revision.get('status',{}).get('imageDigest') or revision['spec']['containers'][0]['image']
+    if expected_image and image!=expected_image:raise ValueError('Unexpected worker-enabled image; traffic unchanged')
+    if traffic(current)!=traffic(before):raise ValueError('Traffic changed concurrently; activation stopped')
+    if not any(c.get('type')=='Ready' and c.get('status')=='True' for c in revision['status'].get('conditions',[])):
+        raise ValueError('Worker-enabled revision is not ready')
+    rollback=','.join(f'{k}={v}' for k,v in sorted(traffic(before).items()))
+    gcloud('run','services','update-traffic',SERVICE,'--to-revisions='+name+'=100','--quiet')
+    try:
+        from verify_rollout import wait_for_health
+        wait_for_health(before['status']['url'],'theta-foundation-3.2.0',name)
+    except Exception:
+        gcloud('run','services','update-traffic',SERVICE,'--to-revisions='+rollback,'--quiet')
+        raise RuntimeError('Worker revision verification failed; previous traffic restored') from None
+    print('Worker-enabled serving revision verified:',name)
+
+
 def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--activate-only',action='store_true',help='Activate the already-created worker-enabled revision without rebuilding')
+    args=parser.parse_args()
     service=json.loads(gcloud('run','services','describe',SERVICE,'--format=json'))
-    traffic=[t for t in service['status']['traffic'] if t.get('percent',0)>0]
-    if len(traffic)!=1 or traffic[0]['percent']!=100:raise ValueError('Expected one verified serving revision')
-    revision=json.loads(gcloud('run','revisions','describe',traffic[0]['revisionName'],'--format=json'))
+    routes=[t for t in service['status']['traffic'] if t.get('percent',0)>0]
+    if len(routes)!=1 or routes[0]['percent']!=100:raise ValueError('Expected one verified serving revision')
+    revision=json.loads(gcloud('run','revisions','describe',routes[0]['revisionName'],'--format=json'))
+    image=revision.get('status',{}).get('imageDigest') or revision['spec']['containers'][0]['image']
+    if args.activate_only:
+        activate_worker(service,image)
+        return
     payload=job_spec(revision)
     with tempfile.TemporaryDirectory(prefix='theta-worker-') as work:
         path=Path(work)/'worker.json'
@@ -53,6 +88,7 @@ def main():
                     '--member=serviceAccount:'+identity,'--role=roles/run.invoker','--quiet','--format=none'],check=True)
     subprocess.run(['gcloud','run','services','update',SERVICE,'--project='+PROJECT,'--region='+REGION,
                     '--update-env-vars=THETA_COLLECTION_WORKER='+RESOURCE,'--quiet'],check=True)
+    activate_worker(service,image)
     print('Private collection worker configured. Existing Admin authorization controls Resume.')
     print('No collection is started automatically. Saved plans remain unchanged.')
 
