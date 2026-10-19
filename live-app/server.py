@@ -1,4 +1,4 @@
-"""Theta Plus data foundation. Legacy trading analysis has been removed."""
+"""Theta Plus data foundation and versioned read-only research. Legacy engine remains retired."""
 from __future__ import annotations
 import os,secrets
 import asyncio
@@ -21,6 +21,7 @@ from dhan_data import fetch_history,fetch_chain,verify_record
 from collection import Collector,CollectionPlan
 from history_coverage import coverage_report
 from worker import launch_worker,worker_status
+from research import workspace, risk_plan, RiskInput, PaperNote, ReplayInput, replay_report, RULE_VERSION
 ROOT=Path(__file__).parent
 class DhanTokenInput(Model):
     token: str = Field(min_length=20,max_length=4096)
@@ -61,6 +62,47 @@ def create_app(db_path=None):
     app.state.store=store
     collector=Collector(provider,store)
     app.state.collector=collector
+
+    @app.get('/api/research/workspace')
+    def research_workspace(symbol:str='nifty'):
+        if symbol not in ('nifty','banknifty'):raise HTTPException(422,'Choose NIFTY or BANKNIFTY')
+        result=workspace(store,symbol,options=board.options)
+        result['collection']=collector.jobs()
+        result['worker']=worker_status(store)
+        result['credential_check']=(store.rows('credential_status',1) or [{}])[0].get('data')
+        result['markets']=board.view()
+        return result
+
+    @app.post('/api/research/risk')
+    def research_risk(payload:RiskInput):
+        return risk_plan(payload)
+
+    @app.post('/api/research/journal')
+    def research_journal_write(payload:PaperNote,request:Request):
+        require_admin(request)
+        key='research-notes/'+payload.id
+        existing=store.document(key)[0]
+        if existing is not None:
+            if existing['input']!=payload.model_dump():raise HTTPException(409,'Note ID already used with different contents')
+            return existing
+        note={'input':payload.model_dump(),'rule_version':RULE_VERSION,'created_at':datetime.now(timezone.utc).isoformat(),
+              'kind':'OBSERVATION_NOT_TRADE','execution':'NO_BROKER_EXECUTION'}
+        # Fixed document key is the canonical idempotent journal; no duplicate side writes.
+        if not store.put_document(key,note,0):raise HTTPException(409,'Journal changed concurrently; retry')
+        return note
+
+    @app.get('/api/research/journal')
+    def research_notes(after:str=''):
+        import re
+        if after and not re.fullmatch(r'research-notes/[a-f0-9]{32}',after):raise HTTPException(422,'Invalid journal cursor')
+        names=store.document_names('research-notes/',after,101)
+        return {'entries':[store.document(k)[0] for k in names[:100]],'next_cursor':names[99] if len(names)>100 else None,
+                'scope':'Immutable observation journal. No fills or trade P&L are inferred.'}
+
+    @app.post('/api/research/replay')
+    async def research_replay(payload:ReplayInput):
+        try:return await asyncio.to_thread(replay_report,store,payload)
+        except ValueError as exc:raise HTTPException(422,str(exc)) from None
 
     @app.post('/api/collection/profile/check')
     async def collection_profile(request:Request):
@@ -148,7 +190,7 @@ def create_app(db_path=None):
             'auth_mode':'public' if public_workspace else 'workspace_key',
             'token_screen_enabled':bool(credential_source.pair_secret or credential_source.secret_name) and admin_config(),
             'credential_check':(store.rows('credential_status',1) or [{}])[0].get('data'),
-            'execution':'NO_BROKER_EXECUTION','analysis_state':'NOT_IMPLEMENTED',
+            'execution':'NO_BROKER_EXECUTION','analysis_state':'READ_ONLY_RESEARCH_UNVALIDATED',
             'legacy_analysis':'REMOVED','saved_data':'RETAINED',
             'server_time':datetime.now(timezone.utc).isoformat()}
 

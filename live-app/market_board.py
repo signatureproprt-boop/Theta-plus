@@ -43,7 +43,7 @@ def parse_master(text,today):
             expiry=date.fromisoformat(row['SM_EXPIRY_DATE'][:10]) if inst!='INDEX' else None
         except (ValueError,TypeError):continue
         if expiry and expiry<today:continue
-        if inst=='OPTIDX' and exchange=='NSE' and row.get('UNDERLYING_SYMBOL')=='NIFTY':
+        if inst=='OPTIDX' and exchange=='NSE' and row.get('UNDERLYING_SYMBOL') in ('NIFTY','BANKNIFTY'):
             try:
                 lot=float(row['LOT_SIZE']);strike=float(row['STRIKE_PRICE']);side=row['OPTION_TYPE']
                 if not lot.is_integer() or not 0<lot<=100000 or not math.isfinite(strike) or strike<=0 or side not in ('CE','PE'):continue
