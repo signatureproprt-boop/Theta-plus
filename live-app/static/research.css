@@ -12,3 +12,5 @@
 .room-setup-label{display:grid;gap:6px;font-size:12px;padding-top:12px}.room-setup-label select{width:100%}.risk-costs summary{font-size:12px;cursor:pointer;color:var(--mint)}
 @media(min-width:1001px){#page-research .research-layout{grid-template-columns:minmax(0,1fr) 290px}#page-research .research-chart{height:330px}}
 @media(min-width:781px) and (max-width:1000px){#page-research .research-layout{grid-template-columns:minmax(0,1fr) 250px}}
+
+.setup-checks h3{font-size:12px;margin:12px 0 4px;color:var(--text)}.setup-checks small{display:block;font-size:11px;line-height:1.5;margin:3px 0 8px;color:var(--muted)}

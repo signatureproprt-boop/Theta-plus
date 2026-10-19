@@ -40,6 +40,7 @@ class AuditInput(Model):
 
 class LiveInput(Model):
     symbol: Literal['nifty','banknifty']
+    contract_id: str = Field(default='',max_length=40,pattern=r'^[0-9]*$')
 
 class DhanHistoryInput(Model):
     kind: str
@@ -87,7 +88,7 @@ def create_app(db_path=None):
             result['context']=await refresh_context(provider,store,board,payload.symbol)
             from breadth import refresh as refresh_breadth
             result['context']['breadth']=await refresh_breadth(provider,store,board,payload.symbol)
-            result['workspace']=await asyncio.to_thread(workspace,store,payload.symbol,options=board.options)
+            result['workspace']=await asyncio.to_thread(workspace,store,payload.symbol,options=board.options,contract_id=payload.contract_id)
             return result
         except ProviderError as exc:raise HTTPException(503,str(exc)) from None
 

@@ -133,3 +133,27 @@ test('missing spot never labels a median strike as ATM',async()=>{
   const html=e.element('page-research').innerHTML;
   assert.match(html,/Spot unavailable/);assert.ok(!html.includes('<small>ATM</small>'));
 });
+
+test('session refresh binds selected security ID without a second workspace fetch',async()=>{
+  const e=environment('research',{chain:{expiry:contract.expiry,contracts:[contract]}});await e.flush();
+  e.context.window.thetaResearchPickContract(contract);await e.flush();
+  e.context.window.thetaLiveIsActive=()=>true;
+  let payload;e.context.window.thetaAdminRequest=async(_path,input)=>{payload=input;return {session_date:'2026-10-19',candles:[],expected_minutes:0,missing_minutes:0,freshness:{state:'MISSING'},received_at:'2026-10-19T07:00:00Z',workspace:{...e.data,setups:[{setup:'opening_range',state:'NO_TRADE',failed:['SPREAD_TOO_WIDE'],reason_codes:['SPREAD_TOO_WIDE']}]}};};
+  const before=e.calls.length;await e.context.window.thetaSessionRefresh();await e.flush();
+  assert.equal(payload.contract_id,'123');assert.equal(e.calls.length,before);
+  assert.match(e.element('page-research').innerHTML,/Rule blocked/);
+  assert.match(e.element('page-research').innerHTML,/spread to narrow/);
+});
+test('late session response cannot overwrite a newer contract or its setup checks',async()=>{
+  const second={...contract,security_id:'456',side:'PE'};
+  const e=environment('research',{chain:{expiry:contract.expiry,contracts:[contract,second]}});await e.flush();
+  e.context.window.thetaResearchPickContract(contract);await e.flush();
+  e.context.window.thetaLiveIsActive=()=>true;
+  let release;e.context.window.thetaAdminRequest=()=>new Promise(resolve=>{release=resolve;});
+  const pending=e.context.window.thetaSessionRefresh();
+  e.context.window.thetaResearchPickContract(second);await e.flush();
+  release({session_date:'2026-10-19',candles:[],expected_minutes:0,missing_minutes:0,freshness:{state:'MISSING'},workspace:{chain:{contracts:[contract]},setups:[{setup:'opening_range',state:'CONFIRM',reason_codes:[]}]}});
+  await pending;await e.flush();
+  assert.equal(e.context.window.thetaResearchSnapshot().selected.security_id,'456');
+  assert.ok(!e.element('page-research').innerHTML.includes('Trigger met'));
+});
