@@ -152,3 +152,10 @@ worker remains independent. No unattended live recorder is claimed.
 References: https://dhanhq.co/docs/v2/live-market-feed/ and the installed official
 DhanHQ-py 2.3.0 MarketFeed source. Dhan supports up to five sockets per account;
 the research bridge uses one. Other applications may consume the remaining quota.
+
+
+### Live correction 3.3.2
+
+Actual 3.3.1 verification received option ticks but no index ticks, and live LTT appeared 5h30 ahead of server UTC. Indices now use official SDK Ticker mode (15); derivatives retain Full mode (21). Dhan support confirms indices do not supply Full depth/OI: https://madefortrade.in/t/59525 .
+
+The live adapter alone normalizes Dhan's IST wall-clock LTT epoch by subtracting 19800 seconds; raw_ltt_epoch and the convention remain in every observation for audit. Dhan support confirmation: https://madefortrade.in/t/57896/2 . This supersedes the initial assumption that this live field was a UTC epoch. Historical candle timestamps are unchanged. Tests cover mixed subscription modes, stale/future timestamps and UTC date rollover. Exchange quote time remains unavailable, so live depth still cannot unlock setup signals. Production verification of the corrected index stream remains a deployment check.

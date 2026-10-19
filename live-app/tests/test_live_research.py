@@ -15,15 +15,23 @@ def at():return datetime(2026,10,19,8,0,tzinfo=timezone.utc)
 def codec():return object.__new__(MarketFeed)
 
 def ticker(sid=13,epoch=None,price=100):
-    return struct.pack('<BHBIfI',2,16,0,sid,price,int((epoch or at()).timestamp()))
+    return struct.pack('<BHBIfI',2,16,0,sid,price,int((epoch or at()).timestamp())+19800)
 
 def instruments():return {(0,'13'):{'segment':'IDX_I','security_id':'13','key':'nifty','role':'underlying','label':'NIFTY'}}
 
 def test_epoch_keeps_date_not_just_sdk_time_and_never_implies_quote_time():
     row=live.observation(codec(),ticker(),instruments(),at()+timedelta(seconds=1))
     assert row['trade_at']=='2026-10-19T08:00:00+00:00'
+    assert row['raw_ltt_epoch']==int(at().timestamp())+19800
     assert row['trade_state']=='RECENT_TRADE' and row['ltp']==100
     assert row['quote_at'] is None and not row['signal_eligible']
+
+def test_live_ist_epoch_normalization_preserves_utc_date_at_midnight_boundary():
+    traded=datetime(2026,10,18,20,0,tzinfo=timezone.utc)
+    row=live.observation(codec(),ticker(epoch=traded),instruments(),traded)
+    assert row['trade_at']=='2026-10-18T20:00:00+00:00'
+    assert row['trade_state']=='RECENT_TRADE'
+
 
 @pytest.mark.parametrize('delta,expected',[(11,'STALE_TRADE'),(-1,'FUTURE_TIMESTAMP')])
 def test_old_and_future_trade_time_fail_closed(delta,expected):
@@ -41,7 +49,7 @@ def test_unknown_security_and_previous_close_do_not_become_ticks():
 
 def test_full_quote_spread_and_oi_with_no_fabricated_quote_timestamp():
     depth=struct.pack('<IIHHff',100,200,1,2,99,101)*5
-    packet=struct.pack('<BHBIfHIfIIIIIIffff100s',8,162,2,123,100,10,int(at().timestamp()),100,1000,100,200,500,501,499,100,99,101,98,depth)
+    packet=struct.pack('<BHBIfHIfIIIIIIffff100s',8,162,2,123,100,10,int(at().timestamp())+19800,100,1000,100,200,500,501,499,100,99,101,98,depth)
     lookup={(2,'123'):{'segment':'NSE_FNO','security_id':'123','role':'option'}}
     row=live.observation(codec(),packet,lookup,at())
     assert row['spread_pct']==2 and row['oi']==500 and row['volume']==1000

@@ -14,8 +14,8 @@ def main():
     for attempt in range(12):
         try:
             health=get('/health-check');engine=get('/api/collection/engine')
-            if health.get('version')=='theta-foundation-3.3.1' and engine['sdk']['version']=='2.3.0' and engine['worker']['configured']:
-                print('VERIFIED: Theta Plus 3.3.1, official DhanHQ-py 2.3.0, private background worker configured.')
+            if health.get('version')=='theta-foundation-3.3.2' and engine['sdk']['version']=='2.3.0' and engine['worker']['configured']:
+                print('VERIFIED: Theta Plus 3.3.2, official DhanHQ-py 2.3.0, private background worker configured.')
                 print('Open Collect all data, select your plan and Resume. The server continues after the tablet closes.')
                 print('SDK installation does not establish historical coverage; inspect outcomes and coverage separately.')
                 day=datetime.now(ZoneInfo('Asia/Kolkata')).date()-timedelta(days=1)

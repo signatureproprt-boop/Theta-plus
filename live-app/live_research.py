@@ -9,7 +9,7 @@ import logging
 import struct
 import time
 import uuid
-from datetime import datetime,timezone
+from datetime import datetime,timezone,timedelta
 from urllib.parse import urlencode
 from fastapi import HTTPException
 import websockets
@@ -45,9 +45,14 @@ def observation(codec,packet,instruments,received):
     if len(packet)<minimum:raise ValueError('Truncated price packet')
     decoded=decode_packet(codec,packet)
     if not isinstance(decoded,dict):return None
-    # SDK utc_time() discards the date. Preserve the original full epoch instead.
+    # Dhan support confirms live LTT uses an IST wall-clock epoch. The SDK's
+    # utc_time() returns that clock without a date. Preserve raw epoch and apply
+    # this vendor-specific convention ONLY here, never to historical candles.
+    # https://madefortrade.in/t/57896/2
     epoch=struct.unpack_from('<I',packet,12 if code==2 else 14)[0]
-    traded=stamp(epoch);price=number(decoded.get('LTP'))
+    raw_time=stamp(epoch)
+    traded=raw_time-timedelta(seconds=19800) if raw_time else None
+    price=number(decoded.get('LTP'))
     if price is None or price<=0:return None
     age=(received-traded).total_seconds() if traded else None
     state='TIME_UNVERIFIED' if traded is None else 'FUTURE_TIMESTAMP' if age<0 else 'RECENT_TRADE' if age<=10 else 'STALE_TRADE'
@@ -55,6 +60,7 @@ def observation(codec,packet,instruments,received):
     bid,ask=number(depth.get('bid_price')),number(depth.get('ask_price'))
     valid=bid is not None and ask is not None and 0<bid<=ask
     return {'type':'tick',**identity,'ltp':price,'trade_at':traded.isoformat() if traded else None,
+            'raw_ltt_epoch':epoch,'timestamp_convention':'Dhan live LTT IST wall-clock epoch; UTC = raw epoch - 19800s',
             'received_at':received.isoformat(),'trade_state':state,
             'bid':bid,'ask':ask,'spread_pct':100*(ask-bid)/((ask+bid)/2) if valid else None,
             'volume':number(decoded.get('volume')),'oi':number(decoded.get('OI')),

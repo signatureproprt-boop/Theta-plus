@@ -87,6 +87,21 @@ def test_sdk_feed_subscription_and_real_binary_decoder(family):
     asyncio.run(run())
 
 
+def test_mixed_live_subscription_uses_ticker_for_indices_and_full_for_derivatives():
+    async def run():
+        items=[{'security_id':'13','segment':'IDX_I'},
+               {'security_id':'123','segment':'NSE_FNO'}]
+        codec=await asyncio.to_thread(make_codec,Credentials(),'live',items)
+        sent=[]
+        async def send(packet):sent.append(json.loads(packet))
+        codec.ws=SimpleNamespace(send=send)
+        await codec.subscribe_instruments()
+        by_code={packet['RequestCode']:packet['InstrumentList'] for packet in sent}
+        assert by_code=={15:[{'ExchangeSegment':'IDX_I','SecurityId':'13'}],
+                         21:[{'ExchangeSegment':'NSE_FNO','SecurityId':'123'}]}
+    asyncio.run(run())
+
+
 def test_worker_runs_existing_checkpoint_until_paused_and_releases_lease(tmp_path,monkeypatch):
     store=Store(tmp_path/'s.db');jid='a'*32
     store.put_document('jobs/'+jid,{'id':jid,'state':'running'},0)

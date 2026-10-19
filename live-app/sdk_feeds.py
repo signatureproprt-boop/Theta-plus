@@ -19,7 +19,9 @@ def make_codec(credentials,family,instruments):
         segment=SEGMENTS.get(item['segment'])
         if segment is None or family!='live' and segment not in (1,2):
             raise ProviderError('Instrument segment is unsupported by this SDK feed')
-        tuples.append((segment,item['security_id'],MarketFeed.Full) if family=='live' else (segment,item['security_id']))
+        # Spot indices have no depth/OI and are not delivered in Full mode.
+        mode=MarketFeed.Ticker if segment==0 else MarketFeed.Full
+        tuples.append((segment,item['security_id'],mode) if family=='live' else (segment,item['security_id']))
     try:
         codec=MarketFeed(context,tuples,version='v2') if family=='live' else FullDepth(context,tuples,depth_level=20 if family=='depth20' else 200)
         codec.loop.close()  # Theta owns the async lifecycle and bounded socket.
