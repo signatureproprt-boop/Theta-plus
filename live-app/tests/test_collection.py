@@ -347,3 +347,35 @@ def test_off_grid_timestamp_is_not_silently_normalized(setup):
     raw=candles();raw['timestamp'][0]+=1
     with pytest.raises(ProviderError,match='minute boundary'):
         c.persist_candles(task,{'raw':raw})
+
+
+@pytest.mark.parametrize('code,status',[('DH-905',400),('DH-905',200),('BAD_REQUEST',422)])
+def test_rejected_request_stops_without_losing_task_or_claiming_coverage(setup,code,status):
+    c,p,s=setup;jid=plan(c)
+    p.problem=ProviderError('Dhan request rejected',code=code,status=status)
+    before=c.get_job(jid)
+    result=run(c,jid)
+    assert result['state']=='request_review'
+    assert result['provider_calls']==1 and result['items_assessed']==0
+    assert result['rows_saved']==0 and sum(result['counts'].values())==0
+    job=c.get_job(jid)
+    assert job['cursor']==before['cursor'] and job['config']==before['config']
+    assert job['current']['item']['security_id']=='13'
+    assert job['request_error']['http_status']==status
+    assert 'retry_at' not in job and c.results(jid)['items']==[]
+    run(c,jid)
+    assert len(p.calls)==1
+    p.problem=None;c.control(jid,'resume')
+    assert run(c,jid)['counts']['completed']==1
+    assert len(p.calls)==2
+
+
+def test_new_plan_prioritizes_index_without_rewriting_old_plan(setup):
+    c,p,s=setup
+    cat,v=s.document('catalogue/current')
+    cat['pages'].insert(0,dict(cat['pages'][0],group='BSE_CURRENCY-FUTCUR',key='catalogue/other'))
+    s.put_document('catalogue/current',cat,v)
+    job=c.get_job(plan(c))
+    assert job['pages'][0]['group']=='IDX_I-INDEX'
+    assert len(job['pages'])==2
+    assert s.document('catalogue/current')[0]['pages'][0]['group']=='BSE_CURRENCY-FUTCUR'
