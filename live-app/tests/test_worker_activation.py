@@ -51,3 +51,18 @@ def test_restores_traffic_when_worker_revision_health_fails(state,monkeypatch):
     monkeypatch.setitem(sys.modules,'verify_rollout',SimpleNamespace(wait_for_health=fail))
     with pytest.raises(RuntimeError,match='restored'):m.activate_worker(before,'repo@sha256:fixed')
     assert '--to-revisions=sdk-revision=100' in calls[-1]
+
+
+def test_repair_forces_new_revision_same_image_and_explicit_worker_env(state):
+    before,current,revision,calls,checks=state
+    candidate=m.configure_worker_revision(before,'repo@sha256:fixed')
+    command=calls[-1]
+    assert candidate.startswith('theta-plus-worker-')
+    assert '--image=repo@sha256:fixed' in command and '--no-traffic' in command
+    assert '--update-env-vars=THETA_COLLECTION_WORKER='+m.RESOURCE in command
+    assert '--revision-suffix='+candidate.removeprefix('theta-plus-') in command
+    # Latest-ready can still be stale. Activation checks the exact created revision.
+    current['status']['latestReadyRevisionName']='stale-sdk-revision'
+    m.activate_worker(before,'repo@sha256:fixed',candidate)
+    assert '--to-revisions='+candidate+'=100' in calls[-1]
+    assert checks[0][-1]==candidate

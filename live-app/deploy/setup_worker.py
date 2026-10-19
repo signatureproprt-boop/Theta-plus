@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import uuid
 
 PROJECT='theta-pluse'
 REGION='asia-south1'
@@ -42,10 +43,21 @@ def traffic(service):
     return {t['revisionName']:t['percent'] for t in service['status']['traffic'] if t.get('percent',0)>0}
 
 
-def activate_worker(before,expected_image=None):
+def configure_worker_revision(before,image):
+    """Force a distinct revision with the worker env and the same immutable image."""
+    current=json.loads(gcloud('run','services','describe',SERVICE,'--format=json'))
+    if traffic(current)!=traffic(before):raise ValueError('Traffic changed concurrently; configuration stopped')
+    suffix='worker-'+uuid.uuid4().hex[:12]
+    gcloud('run','services','update',SERVICE,'--image='+image,
+           '--revision-suffix='+suffix,'--no-traffic',
+           '--update-env-vars=THETA_COLLECTION_WORKER='+RESOURCE,'--quiet')
+    return SERVICE+'-'+suffix
+
+
+def activate_worker(before,expected_image=None,candidate=None):
     """Explicit traffic is pinned by release-existing.sh; env update doesn't move it."""
     current=json.loads(gcloud('run','services','describe',SERVICE,'--format=json'))
-    name=current['status']['latestReadyRevisionName']
+    name=candidate or current['status']['latestReadyRevisionName']
     revision=json.loads(gcloud('run','revisions','describe',name,'--format=json'))
     env={e['name']:e.get('value') for e in revision['spec']['containers'][0].get('env',[])}
     if env.get('THETA_COLLECTION_WORKER')!=RESOURCE:raise ValueError('Latest ready revision has no expected worker configuration; traffic unchanged')
@@ -67,7 +79,7 @@ def activate_worker(before,expected_image=None):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--activate-only',action='store_true',help='Activate the already-created worker-enabled revision without rebuilding')
+    parser.add_argument('--activate-only',action='store_true',help='Create and activate a worker-enabled revision using the current image; no rebuild')
     args=parser.parse_args()
     service=json.loads(gcloud('run','services','describe',SERVICE,'--format=json'))
     routes=[t for t in service['status']['traffic'] if t.get('percent',0)>0]
@@ -75,7 +87,8 @@ def main():
     revision=json.loads(gcloud('run','revisions','describe',routes[0]['revisionName'],'--format=json'))
     image=revision.get('status',{}).get('imageDigest') or revision['spec']['containers'][0]['image']
     if args.activate_only:
-        activate_worker(service,image)
+        candidate=configure_worker_revision(service,image)
+        activate_worker(service,image,candidate)
         return
     payload=job_spec(revision)
     with tempfile.TemporaryDirectory(prefix='theta-worker-') as work:
@@ -86,9 +99,8 @@ def main():
     identity=revision['spec']['serviceAccountName']
     subprocess.run(['gcloud','run','jobs','add-iam-policy-binding',JOB,'--project='+PROJECT,'--region='+REGION,
                     '--member=serviceAccount:'+identity,'--role=roles/run.invoker','--quiet','--format=none'],check=True)
-    subprocess.run(['gcloud','run','services','update',SERVICE,'--project='+PROJECT,'--region='+REGION,
-                    '--update-env-vars=THETA_COLLECTION_WORKER='+RESOURCE,'--quiet'],check=True)
-    activate_worker(service,image)
+    candidate=configure_worker_revision(service,image)
+    activate_worker(service,image,candidate)
     print('Private collection worker configured. Existing Admin authorization controls Resume.')
     print('No collection is started automatically. Saved plans remain unchanged.')
 
