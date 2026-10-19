@@ -35,6 +35,8 @@ async def diagnose(collector,jid):
         report['probes'].append(probe)
         if probe.get('code') in ('DH-901','DH-902','807','808','809','810'):break
     report['conclusion']='RECENT_RANGE_WORKS_REVIEW_ORIGINAL_DATES' if report['probes'][0]['state']=='ROWS_PRESENT' else 'SOURCE_REQUEST_REMAINS_UNRESOLVED'
+    if len(report['probes'])==2 and report['probes'][0]['state']=='REJECTED' and report['probes'][1]['state']=='ROWS_PRESENT':
+        report['conclusion']='RECENT_INTRADAY_AVAILABLE_DAILY_REQUEST_REJECTED'
     from collection import replace
     replace(collector.store,'research/request-review/'+jid,lambda _:report)
     return report
