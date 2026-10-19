@@ -19,7 +19,7 @@ def main():
         start-=timedelta(days=1)
         if start.weekday()<5:days+=1
     health=request('/health-check')
-    if health.get('version')!='theta-foundation-3.4.2':
+    if health.get('version')!='theta-foundation-3.4.3':
         print('PENDING: live version is',health.get('version'));return 2
     print('LIVE VERSION VERIFIED:',health['version'],flush=True)
     report=request(f'/api/dhan/coverage?start={start}&end={today}')

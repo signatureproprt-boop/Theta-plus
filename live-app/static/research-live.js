@@ -53,7 +53,7 @@
     while(active&&generation===id){controller=new AbortController();connected=false;lastFrame=Date.now();try{
       const response=await window.thetaLiveStreamRequest(symbol,controller.signal);
       if(generation!==id||!active){await response.body?.cancel?.().catch(()=>{});break;}
-      if(!response.ok){const result=await response.json();if(response.status===409){receive({type:'status',state:'STREAM_BUSY'});if(active&&generation===id)await new Promise(resolve=>setTimeout(resolve,retryDelay));continue;}throw Error(result.detail||'Live request rejected');}
+      if(!response.ok){if(response.status===409){receive({type:'status',state:'STREAM_BUSY'});if(active&&generation===id)await new Promise(resolve=>setTimeout(resolve,retryDelay));continue;}await window.thetaReadResponse(response);}
       if(!response.body)throw Error('Streaming is unavailable in this browser');
       const reader=response.body.getReader(),decoder=new TextDecoder();let pending='';
       while(active&&generation===id){const {done,value}=await reader.read();if(done)break;pending+=decoder.decode(value,{stream:true});if(pending.length>2000000)throw Error('Invalid stream size');let end;while((end=pending.indexOf('\n\n'))>=0){const block=pending.slice(0,end);pending=pending.slice(end+2);if(block.startsWith('data: ')&&active&&generation===id)receive(JSON.parse(block.slice(6)));}}
@@ -61,7 +61,7 @@
       if(active&&generation===id){if(!busySince)text('Renewing live connection…');await new Promise(resolve=>setTimeout(resolve,retryDelay));}
     }catch(error){if(generation!==id||!active)break;if(error.name==='AbortError'&&!stalled)break;stalled=false;retries++;
       // Authentication/configuration failures need a deliberate user action.
-      if(/Admin|password|credentials|token|rejected/i.test(error.message)||retries>=5){active=false;text(error.message);render();break;}
+      if(error.status===429||/Admin|password|credentials|token|rejected/i.test(error.message)||retries>=5){active=false;text(error.message);render();break;}
       text('Disconnected · reconnect attempt '+retries+'/5');render();await new Promise(resolve=>setTimeout(resolve,Math.min(30000,1000*2**retries)));
     }}
   }

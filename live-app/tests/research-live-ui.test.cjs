@@ -10,7 +10,7 @@ function environment(messages,authorized=true){
   const text=messages.map(x=>'data: '+JSON.stringify(x)+'\n\n').join('');const encoded=new TextEncoder().encode(text);let read=0;
   const context={document:{getElementById:node},window:{addEventListener(){}},AbortController,TextDecoder,Date,Number,Math,String,Map,Set,console,setInterval:fn=>timers.push(fn),setTimeout:(fn,ms)=>{timeouts.push({fn,ms});return timeouts.length;}};
   if(authorized)context.window.thetaLiveStreamRequest=async(symbol,signal)=>{calls.push({symbol,signal});return {ok:true,body:{getReader:()=>({read:async()=>read++===0?{value:encoded.slice(0,17),done:false}:read===2?{value:encoded.slice(17),done:false}:{done:true},cancel:async()=>{}})}};};
-  vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/research-live.js'),'utf8'),context);
+  vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/api-response.js'),'utf8'),context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/research-live.js'),'utf8'),context);
   return {context,node,calls,timers,timeouts,flush:async()=>{for(let i=0;i<5;i++)await new Promise(resolve=>setImmediate(resolve));}};
 }
 

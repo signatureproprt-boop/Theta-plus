@@ -4,8 +4,8 @@
   const families = ['daily','intraday','rolling','chain','quotes','live','depth20','depth200'];
   const labels = {daily:'Daily history',intraday:'Intraday history',rolling:'Expired options',chain:'All active expiries / chains',quotes:'Quote snapshots',live:'Live feed samples',depth20:'20-level depth samples',depth200:'200-level depth samples'};
   const get = async path => {
-    const response = await fetch('/api/collection/'+path,{signal:AbortSignal.timeout(30000)});
-    const result = await response.json();
+    const response = await window.thetaApiFetch('/api/collection/'+path,{signal:AbortSignal.timeout(30000)});
+    const result = await window.thetaReadResponse(response);
     if (!response.ok) throw Error(result.detail || 'Could not read collection status');
     return result;
   };
