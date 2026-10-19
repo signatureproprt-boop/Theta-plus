@@ -31,7 +31,7 @@ def test_promotes_exact_worker_revision_even_when_traffic_is_pinned(state):
     before,current,revision,calls,checks=state
     m.activate_worker(before,'repo@sha256:fixed')
     assert '--to-revisions=worker-revision=100' in calls[-1]
-    assert checks==[('https://theta.test','theta-foundation-3.3.0','worker-revision')]
+    assert checks==[('https://theta.test','theta-foundation-3.3.1','worker-revision')]
 
 
 @pytest.mark.parametrize('reason',['missing_env','wrong_image','traffic_changed','not_ready'])

@@ -122,3 +122,33 @@ environment and exact candidate rollout/rollback checks. No worker recreation,
 automatic collection restart, IAM changes or token replacement is needed.
 Authenticated cloud deployment and live smoke verification require the user's
 configured Cloud Shell if unavailable in the Codex environment.
+
+
+## Live LTP bridge (3.3.1)
+
+Trading Room and research pages expose Start live / Stop live. Unlock the existing
+Admin once in this tab before starting. The server holds the Dhan token; the
+browser receives no token or authenticated provider URL. The Admin header is
+sent only to the same-origin protected stream route. Lock Admin stops the live
+stream in that tab. There are no order methods.
+
+The bridge resolves the current master, subscribes NIFTY/BANKNIFTY/VIX/current
+futures plus the selected underlying current-expiry ATM +/-2 returned option
+strikes when master identity matches. It uses the official MarketFeed codec and
+subscription builder. The original packet epoch retains the full LTT date; SDK
+formatted HH:MM:SS is not used as proof of freshness. LTT <=10s is a recent trade,
+not an exchange quote timestamp. Quote eligibility and Greeks remain blocked.
+
+One separate cross-instance research/live-lease limits research sockets without
+changing collection leases or job manifests. The SSE request rotates within
+240 seconds including startup; the browser renews while the page stays connected.
+Retry backoff is bounded; provider/auth failures require explicit restart. Heartbeat
+stalls are labelled and trigger bounded reconnect. Ticks are coalesced once per
+second for display, not saved as full-session OHLC. Observed LTP chart retains
+at most 300 points, breaks across >10s gaps, and does not backfill gaps or claim
+complete candles. Closing the page stops this research stream; the historical
+worker remains independent. No unattended live recorder is claimed.
+
+References: https://dhanhq.co/docs/v2/live-market-feed/ and the installed official
+DhanHQ-py 2.3.0 MarketFeed source. Dhan supports up to five sockets per account;
+the research bridge uses one. Other applications may consume the remaining quota.
