@@ -40,6 +40,11 @@ SHARD_SIZE = 1000
 def now():
     return datetime.now(timezone.utc).isoformat()
 
+def contract_expiry(item):
+    # Master files use placeholder dates even for instruments that never expire.
+    # Apply this when reading existing immutable catalogue pages as well as imports.
+    return None if item['instrument'] in ('INDEX','EQUITY') else item.get('expiry')
+
 def digest(value):
     return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':')).encode()).hexdigest()
 
@@ -84,7 +89,7 @@ def parse_catalogue(text):
         reason=None
         if not sid.isdigit():reason='Invalid security ID'
         if not segment:reason='No documented API segment mapping: '+exchange+'_'+raw_segment
-        expiry=(row.get('SM_EXPIRY_DATE') or '')[:10] or None
+        expiry=None if row.get('INSTRUMENT','').strip() in ('INDEX','EQUITY') else (row.get('SM_EXPIRY_DATE') or '')[:10] or None
         if expiry:
             try:date.fromisoformat(expiry)
             except ValueError:
@@ -309,8 +314,9 @@ class Collector:
                     return {'family':family,'item':item,'variant':variant,'from':start.isoformat(),
                             'to':min(end,horizon).isoformat(),'skip':'Outside documented five-year history horizon','horizon_gap':True}
                 start=max(start,horizon)
-        if family in ('daily','intraday') and item.get('expiry'):
-            end=min(end,date.fromisoformat(item['expiry'])+timedelta(days=1))
+        expiry=contract_expiry(item)
+        if family in ('daily','intraday') and expiry:
+            end=min(end,date.fromisoformat(expiry)+timedelta(days=1))
         window_days=30 if family=='rolling' else 90 if family=='intraday' else max(1,(end-start).days)
         if family in ('daily','intraday','rolling'):
             start=start+timedelta(days=cursor['window']*window_days)
@@ -324,7 +330,7 @@ class Collector:
             if item['symbol'] in ('INDIA VIX','INDIAVIX'):skip=skip or 'No options for this underlying'
         if family in ('depth20','depth200') and item['segment'] not in ('NSE_EQ','NSE_FNO'):
             skip=skip or 'Full depth documented for NSE equity and derivatives only'
-        if family in ('quotes','live','depth20','depth200','chain') and item.get('expiry') and item['expiry']<datetime.now(IST).date().isoformat():
+        if family in ('quotes','live','depth20','depth200','chain') and expiry and expiry<datetime.now(IST).date().isoformat():
             skip=skip or 'Expired contract is not a current feed instrument'
         task={'family':family,'item':item,'variant':variant,'from':start.isoformat(),
                 'to':end.isoformat(),'skip':skip}
@@ -333,7 +339,8 @@ class Collector:
             entries=self.page_items(job['pages'][cursor['page']]['key'])
             batch=[];span=0
             for candidate in entries[cursor['item']:]:
-                if candidate.get('reason') or (candidate.get('expiry') and candidate['expiry']<datetime.now(IST).date().isoformat()):break
+                expiry=contract_expiry(candidate)
+                if candidate.get('reason') or (expiry and expiry<datetime.now(IST).date().isoformat()):break
                 if candidate['segment']!=item['segment']:break
                 if family=='depth20' and candidate['segment'] not in ('NSE_EQ','NSE_FNO'):break
                 span+=1
@@ -532,7 +539,10 @@ class Collector:
                 if task:break
                 family,item=await asyncio.to_thread(self.select_item,job)
                 if not item:
-                    job['state']='completed';job['message']='Every selected item has an outcome. Review empty, failed and unsupported counts.'
+                    if job['items_assessed']==0:
+                        job['state']='no_work';job['message']='No work items were assessed and no data was collected. Review symbol, segment and date filters; this is not successful coverage.'
+                    else:
+                        job['state']='completed';job['message']='Every selected item has an outcome. Review empty, failed and unsupported counts.'
                     break
                 task=self.task(job,family,item)
             if not task:

@@ -379,3 +379,40 @@ def test_new_plan_prioritizes_index_without_rewriting_old_plan(setup):
     assert job['pages'][0]['group']=='IDX_I-INDEX'
     assert len(job['pages'])==2
     assert s.document('catalogue/current')[0]['pages'][0]['group']=='BSE_CURRENCY-FUTCUR'
+
+
+@pytest.mark.parametrize('kind',['INDEX','EQUITY'])
+def test_placeholder_expiry_not_imported_for_non_expiring_instruments(kind):
+    text='EXCH_ID,SEGMENT,SECURITY_ID,SYMBOL_NAME,INSTRUMENT,SM_EXPIRY_DATE\nNSE,I,13,NIFTY,'+kind+',0001-01-01\n'
+    entries,_,_=parse_catalogue(text)
+    assert entries[0]['expiry'] is None and entries[0]['reason'] is None
+
+
+@pytest.mark.parametrize('family',['daily','intraday'])
+def test_existing_nifty_catalogue_placeholder_does_not_skip_history(setup,family):
+    c,p,s=setup
+    cat=c.catalogue();page=cat['pages'][0]['key'];value,v=s.document(page)
+    value['items'][0]['expiry']='0001-01-01';s.put_document(page,value,v)
+    jid=c.create(CollectionPlan(start='2026-10-16',end='2026-10-17',families=[family],segments=['IDX_I'],symbols=['NIFTY']))['id']
+    c.control(jid,'resume');result=run(c,jid)
+    assert result['counts']['completed']==1 and result['rows_saved']==1
+    assert result['provider_calls']==1 and p.calls[0][1]['securityId']=='13'
+    assert s.document(page)[0]['items'][0]['expiry']=='0001-01-01'
+    assert run(c,jid)['state']=='completed'
+
+
+@pytest.mark.parametrize('family',['chain','quotes','live'])
+def test_existing_placeholder_not_treated_as_expired_current_instrument(setup,family):
+    c,p,s=setup;jid=plan(c);job=c.get_job(jid)
+    page=job['pages'][0]['key'];value,v=s.document(page)
+    value['items'][0]['expiry']='0001-01-01';s.put_document(page,value,v)
+    task=c.task(job,family,value['items'][0])
+    assert task is not None and task['skip'] is None
+    if family in ('quotes','live'):assert len(task['batch'])==1
+
+
+def test_zero_assessed_plan_does_not_report_completed(setup):
+    c,p,s=setup;jid=plan(c,symbols=['DOES_NOT_EXIST'])
+    result=run(c,jid)
+    assert result['state']=='no_work' and result['provider_calls']==0
+    assert result['items_assessed']==0 and p.calls==[]

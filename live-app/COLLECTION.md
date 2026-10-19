@@ -68,7 +68,7 @@ original records/archive are retained. No order or trading API is added.
 1. Deploy live-app with deploy/release-existing.sh from an authenticated Cloud
    Shell. It builds a candidate without traffic, retains existing environment,
    secrets, storage and IAM, verifies readiness, promotes and rolls back on smoke
-   failure. Version: theta-foundation-3.1.1, candidate suffix f311.
+   failure. Version: theta-foundation-3.1.2, candidate suffix f312.
 2. Open Admin and unlock with the existing Admin password.
 3. Open Collect all data, check subscription/segments, refresh the full catalogue.
 4. Choose dates, families and intervals. Create plan, then Resume selected job.
@@ -97,3 +97,10 @@ full plan, verify a short daily-history range for one symbol. Catalogue rows
 include expired contracts; inclusion does not prove historical API eligibility.
 `provider_calls` counts fetch attempts, including rejected requests (and sample
 connection attempts), excluding raw-cache reuse and quota-denied work.
+
+Index and equity instruments do not use contract expiry dates. Placeholder
+expiry values such as 0001-01-01 are ignored both at import and when reading
+existing saved catalogue pages. No catalogue refresh or deletion is required.
+Old zero-work completed jobs remain as evidence; create a new plan to collect
+their intended range. New jobs assessing zero work stop as no_work rather than
+claiming successful completion.
