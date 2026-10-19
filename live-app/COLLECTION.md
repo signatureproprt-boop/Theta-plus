@@ -68,7 +68,7 @@ original records/archive are retained. No order or trading API is added.
 1. Deploy live-app with deploy/release-existing.sh from an authenticated Cloud
    Shell. It builds a candidate without traffic, retains existing environment,
    secrets, storage and IAM, verifies readiness, promotes and rolls back on smoke
-   failure. Version: theta-foundation-3.1.0, candidate suffix f310.
+   failure. Version: theta-foundation-3.1.1, candidate suffix f311.
 2. Open Admin and unlock with the existing Admin password.
 3. Open Collect all data, check subscription/segments, refresh the full catalogue.
 4. Choose dates, families and intervals. Create plan, then Resume selected job.
@@ -87,3 +87,13 @@ pauses, explicit empty/failed results, retry, pagination, window/strike bounds,
 all-expiry chain checkpoints, quote omissions, and Admin protections.
 No real Dhan credentials are used in tests. Real segment/depth entitlements,
 Cloud Run storage writes and a production fetch must be checked after deployment.
+
+Rejected requests (DH-905 or HTTP 400/422) now stop in `request_review` at
+the same item without automatic retry or advancing coverage. A manual Resume
+retries that exact task; changed dates or filters require a new plan. Existing
+job configurations and checkpoints are preserved. The default start date for
+new plans is five years ago, and new plans visit index pages first. Before a
+full plan, verify a short daily-history range for one symbol. Catalogue rows
+include expired contracts; inclusion does not prove historical API eligibility.
+`provider_calls` counts fetch attempts, including rejected requests (and sample
+connection attempts), excluding raw-cache reuse and quota-denied work.

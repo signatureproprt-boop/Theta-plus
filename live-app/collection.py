@@ -205,7 +205,7 @@ class Collector:
         # Preserve every entry; filters select groups, never silently rewrite master.
         pages=[]
         for family in config['families']:
-            for p in cat['pages']:
+            for p in sorted(cat['pages'],key=lambda p:(0 if p['group']=='IDX_I-INDEX' else 1 if p['group'].startswith('NSE_EQ-') else 2,p['key'])):
                 rolling=p['group']=='rolling-underlyings'
                 if (family=='rolling')!=rolling:continue
                 pages.append({**p,'family':family})
@@ -551,12 +551,12 @@ class Collector:
                 else:
                     response,_=await asyncio.to_thread(self.store.document,raw_key)
                     if response is None:
+                        job['provider_calls']+=1
                         if task['family']=='chain_snapshot':
                             body={'UnderlyingScrip':int(task['item']['security_id']),'UnderlyingSeg':task['item']['segment'],'Expiry':task['expiry']}
                             response={'endpoint':'optionchain','request':body,'received_at':now(),
                                       'raw':await self.call(owner,'optionchain',body)}
                         else:response=await self.acquire_data(owner,task)
-                        job['provider_calls']+=1
                         await asyncio.to_thread(install_once,self.store,raw_key,response)
                     result=await asyncio.to_thread(self.persist_result,task,response)
                     result['status']='completed' if result['rows'] else 'empty'
@@ -564,7 +564,7 @@ class Collector:
                 entry={'task':task,'result':result,'checked_at':now()}
                 await asyncio.to_thread(install_once,self.store,'results/'+jid+'/'+key,entry)
                 job['counts'][result['status']]+=1;job['rows_saved']+=result['rows'];job['items_assessed']+=1
-                job['retries']=0;job.pop('retry_at',None)
+                job['retries']=0;job.pop('retry_at',None);job.pop('request_error',None)
                 if task['family']=='chain' and result.get('expiries'):
                     job['chain_pending']=[e for e in result['expiries'] if e>=datetime.now(IST).date().isoformat()]
                     job['chain_parent']=task
@@ -581,9 +581,16 @@ class Collector:
                 job['message']=str(exc)
                 if code in AUTH_CODES or exc.status==401:
                     job['state']='token_required'
-                elif code=='BUDGET':job['state']='paused'
+                elif code=='BUDGET':
+                    job['state']='paused';job['provider_calls']=max(0,job['provider_calls']-1)
                 elif code in ACCESS_CODES or exc.status==403:
                     job['state']='permission_blocked'
+                elif code=='DH-905' or exc.status in (400,422):
+                    # A rejected request needs review, not repeated identical calls or cursor advancement.
+                    job['state']='request_review'
+                    job['request_error']={'code':code,'http_status':exc.status,'checked_at':now()}
+                    job['retries']=0;job.pop('retry_at',None)
+                    job['message']=str(exc)+'. Collection stopped at this item. Review instrument eligibility and dates; create a revised plan or explicitly resume to retry. No data was marked complete.'
                 else:
                     job['retries']+=1
                     if job['retries']<3:

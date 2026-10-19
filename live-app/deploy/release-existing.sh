@@ -5,7 +5,7 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 project=theta-pluse
 region=asia-south1
 service=theta-plus
-expected_version=theta-foundation-3.1.0
+expected_version=theta-foundation-3.1.1
 command -v gcloud >/dev/null
 command -v curl >/dev/null
 work=$(mktemp -d)
@@ -36,13 +36,13 @@ rollback=$(cat "$work/rollback")
 url=$(cat "$work/url")
 candidate=${1:-}
 if [[ -n $candidate ]]; then
-  [[ $candidate =~ ^theta-plus-f310-[0-9]{14}$ ]] || { echo 'Invalid candidate revision' >&2; exit 1; }
+  [[ $candidate =~ ^theta-plus-f311-[0-9]{14}$ ]] || { echo 'Invalid candidate revision' >&2; exit 1; }
   echo "Reusing candidate $candidate."
 else
   build_account="projects/$project/serviceAccounts/theta-plus-build@$project.iam.gserviceaccount.com"
   # Existing account only; no creation, IAM edits, secrets or configuration reset.
   gcloud iam service-accounts describe "theta-plus-build@$project.iam.gserviceaccount.com" --project="$project" --format='value(email)' >/dev/null
-  suffix="f310-$(date -u +%Y%m%d%H%M%S)"
+  suffix="f311-$(date -u +%Y%m%d%H%M%S)"
   candidate="$service-$suffix"
   echo "Building candidate $candidate; existing traffic remains unchanged."
   gcloud run deploy "$service" --source=. --project="$project" --region="$region" \

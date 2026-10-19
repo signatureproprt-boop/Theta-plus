@@ -4,7 +4,7 @@ const vm=require('node:vm');
 const fs=require('node:fs');
 const path=require('node:path');
 
-function environment() {
+function environment(runState='completed') {
   const nodes=new Map(), events={}, windowEvents={}, calls=[];
   function element(id) {
     if (!nodes.has(id)) {
@@ -43,7 +43,7 @@ function environment() {
       if(url==='/api/collection/jobs' && !opts.method)data={jobs:[],next_cursor:null};
       if(url==='/api/collection/jobs' && opts.method)data={...job};
       if(url.endsWith('/resume'))data={...job,state:'running'};
-      if(url.endsWith('/run'))data={...job,state:'completed',items_assessed:1,rows_saved:1};
+      if(url.endsWith('/run'))data={...job,state:runState,items_assessed:1,rows_saved:1};
       if(url==='/api/collection/jobs/'+job.id)data={...job};
       return {ok:true,status:200,json:async()=>data};
     }};
@@ -87,4 +87,17 @@ test('collection writes without Admin unlock show actionable feedback',async()=>
   await e.click('catalogue-refresh');
   assert.match(e.element('collection-feedback').textContent,/Admin and unlock/);
   assert.equal(e.calls.filter(([url])=>url.endsWith('/catalogue/refresh')).length,0);
+});
+
+
+test('rejected request stops browser pump and retains review status',async()=>{
+  const e=environment('request_review');await e.flush();
+  e.element('token-admin-password').value='fixture-admin';
+  await e.click('admin-signin');
+  // Select an existing job before resuming.
+  const b=e.element('job-button');b.dataset.collectionJob=e.job.id;
+  await e.click('job-button');
+  await e.click('collection-resume');
+  assert.equal(e.calls.filter(([url])=>url.endsWith('/run')).length,1);
+  assert.match(e.element('collection-current').innerHTML,/request review/);
 });

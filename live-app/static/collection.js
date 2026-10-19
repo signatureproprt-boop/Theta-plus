@@ -15,6 +15,9 @@
   };
   function panel() {
     const end = new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Kolkata',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+    const startDate=new Date(end+'T00:00:00Z');
+    startDate.setUTCFullYear(startDate.getUTCFullYear()-5);
+    const start=startDate.toISOString().slice(0,10);
     $('#page-collect').innerHTML = `<article class="card"><div class="card-head"><h2>Complete Dhan collection</h2></div><div class="card-body">
       <p>Collect the available instrument catalogue, history and market snapshots. Every selected item gets an outcome; unavailable data is listed with its reason.</p>
       <p>Open <button class="button secondary" data-go="admin">Admin</button> and unlock with your existing password to manage collection.</p>
@@ -22,13 +25,13 @@
       <button class="button secondary" id="collection-profile">Check subscription / segments</button><button class="button secondary" id="collection-refresh">Refresh progress</button>
       <div id="catalogue-status" role="status">Catalogue not loaded.</div>
       <form id="collection-plan"><div class="form-grid">
-        <label class="field">History from (IST)<input type="date" id="collect-start" value="1900-01-01" required></label>
+        <label class="field">History from (IST)<input type="date" id="collect-start" value="${start}" required></label>
         <label class="field">To (exclusive, IST)<input type="date" id="collect-end" value="${end}" required></label>
         <label class="field">Symbols (blank = all)<input id="collect-symbols" placeholder="NIFTY, BANKNIFTY"></label>
         <label class="field">API segments (blank = all)<input id="collect-segments" placeholder="NSE_EQ, NSE_FNO, MCX_COMM"></label>
       </div><fieldset><legend>Data to collect</legend><div class="collection-options">${families.map(f=>`<label><input type="checkbox" name="collect-family" value="${f}" checked> ${labels[f]}</label>`).join('')}</div></fieldset>
       <fieldset><legend>Intraday / expired-option intervals</legend><div class="collection-options">${[1,5,15,25,60].map(i=>`<label><input type="checkbox" name="collect-interval" value="${i}" checked> ${i} min</label>`).join('')}</div></fieldset>
-      <p>Daily history is requested from your start date. Minute and rolling history have a documented five-year horizon. Full-universe collection can take a long time and use substantial storage.</p>
+      <p>The default range is the last five years; it does not establish full historical coverage. Daily history is requested from your chosen start date. First verify a short range for one symbol before creating a full plan. Minute and rolling history have a documented five-year horizon. Full-universe collection can take a long time and use substantial storage.</p>
       <p>Live and depth selections save one ten-second binary sample per eligible instrument. They do not provide continuous all-market recording or historical depth. Foreign-market feeds need separate verification. Complete historical session checks and continuous live recording are pending.</p>
       <button class="button" type="submit">Create collection plan</button></form>
       <div id="collection-feedback" role="status"></div></div></article>
@@ -50,7 +53,7 @@
     $('#collection-current').innerHTML=`<h3>${esc(job.state.replaceAll('_',' '))}</h3>
     <p>Job ${esc(job.id)} · ${esc(job.items_assessed)} work items assessed · ${esc(job.rows_saved)} rows / frames returned across batches</p>
     <div class="collection-options">${Object.entries(counts).map(([k,v])=>`<span>${esc(k)}: <b>${esc(v)}</b></span>`).join('')}</div>
-    <p>${esc(job.message)}</p><p>Current item: ${esc(job.current_item ? job.current_item.family+' / '+job.current_item.symbol+' / '+job.current_item.segment : '—')}</p><p>Updated: ${esc(job.updated_at)}</p>`;
+    <p>${esc(job.message)}</p><p>Current item: ${esc(job.current_item ? job.current_item.family+' / '+job.current_item.symbol+' / '+job.current_item.segment+' / '+job.current_item.from+' → '+job.current_item.to : '—')}</p><p>Updated: ${esc(job.updated_at)}</p>`;
   }
   async function refresh(append=false) {
     const [cat,list]=await Promise.all([get('catalogue'),get('jobs'+(append && jobCursor?'?after='+encodeURIComponent(jobCursor):''))]);
