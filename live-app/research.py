@@ -62,9 +62,33 @@ def saved_candles(store,symbol,clock=None,record_limit=100):
             row.update(exchange_at=at.isoformat(),closed_at=(at+timedelta(minutes=1)).isoformat(),received_at=m.get('fetched_at') or saved['created_at'])
             if t in rows and any(rows[t][k]!=row[k] for k in ('open','high','low','close','volume')):conflicts.add(t)
             else:rows[t]=row
+    # Latest bounded provider warm-up and current-session snapshots supersede
+    # their explicit request windows. They are never blended with rolling options.
+    clock=clock or datetime.now(timezone.utc)
+    for key in ('research/warmup/'+symbol,'research/session/'+symbol):
+        snapshot=store.document(key)[0]
+        if not snapshot or snapshot.get('symbol')!=symbol:continue
+        try:candle_count(snapshot['raw'])
+        except (ProviderError,KeyError,TypeError):continue
+        received=stamp(snapshot.get('received_at'))
+        if not received or received>clock:continue
+        request=snapshot.get('request') or {}
+        start=stamp(request.get('fromDate','').replace(' ','T')+'+05:30')
+        end=stamp(request.get('toDate','').replace(' ','T')+'+05:30')
+        if not start or not end:continue
+        rows={t:r for t,r in rows.items() if not start.timestamp()<=t<end.timestamp()}
+        conflicts={t for t in conflicts if not start.timestamp()<=t<end.timestamp()}
+        sources.append(key);raw=snapshot['raw']
+        for i,t in enumerate(raw['timestamp']):
+            at=stamp(t);local=at.astimezone(IST)
+            if not start<=at<end or at+timedelta(minutes=1)>clock or local.weekday()>4 or not '09:15'<=local.strftime('%H:%M')<'15:30':continue
+            row={k:raw[k][i] for k in ('timestamp','open','high','low','close','volume')}
+            row.update(exchange_at=at.isoformat(),closed_at=(at+timedelta(minutes=1)).isoformat(),received_at=received.isoformat())
+            if t in rows and any(rows[t][k]!=row[k] for k in ('open','high','low','close','volume')):conflicts.add(t)
+            else:rows[t]=row
     return {'candles':[v for k,v in sorted(rows.items()) if k not in conflicts],
             'conflicting_minutes':len(conflicts),'invalid_record_ids':invalid,'source_record_ids':sources,
-            'read_scope':f'Latest {record_limit} retained dhan_history records; collection job archives are separate',
+            'read_scope':f'Latest {record_limit} retained dhan_history records plus bounded provider warm-up/current-session documents; collection archives are separate',
             'calendar':'Weekday regular-session filter only; holidays/special sessions not certified'}
 
 def aggregate(candles,minutes,clock):
@@ -94,13 +118,33 @@ def ema(values,period):
     for x in values[period:]:avg+=(x-avg)*2/(period+1)
     return avg
 
+def momentum(bars,period=14):
+    """Wilder smoothing; informational indicators, never an entry on their own."""
+    if len(bars)<=period:return {'rsi14':None,'adx14':None,'plus_di':None,'minus_di':None}
+    gains=[];losses=[];tr=[];plus=[];minus=[]
+    for a,b in zip(bars,bars[1:]):
+        delta=b['close']-a['close'];gains.append(max(0,delta));losses.append(max(0,-delta))
+        tr.append(max(b['high']-b['low'],abs(b['high']-a['close']),abs(b['low']-a['close'])))
+        up=b['high']-a['high'];down=a['low']-b['low']
+        plus.append(up if up>down and up>0 else 0);minus.append(down if down>up and down>0 else 0)
+    def smooth(values):
+        avg=sum(values[:period])/period;out=[avg]
+        for v in values[period:]:avg=(avg*(period-1)+v)/period;out.append(avg)
+        return out
+    gain=smooth(gains)[-1];loss=smooth(losses)[-1]
+    rsi=100-100/(1+gain/loss) if loss else 100 if gain else 50
+    ts=smooth(tr);ps=smooth(plus);ms=smooth(minus)
+    pdi=[100*p/t if t else 0 for p,t in zip(ps,ts)];mdi=[100*m/t if t else 0 for m,t in zip(ms,ts)]
+    dx=[100*abs(p-m)/(p+m) if p+m else 0 for p,m in zip(pdi,mdi)]
+    return {'rsi14':rsi,'adx14':smooth(dx)[-1] if len(dx)>=period else None,'plus_di':pdi[-1],'minus_di':mdi[-1]}
+
 def indicators(candles,clock):
     result={}
     for minutes in (1,5,15,60):
         bars=aggregate(candles,minutes,clock);close=[r['close'] for r in bars]
         e20,e50=ema(close,20),ema(close,50)
         result[str(minutes)]={'bars':len(bars),'ema20':e20,'ema50':e50,
-            'bias':'UNAVAILABLE' if e20 is None or e50 is None else 'BULLISH' if e20>e50 else 'BEARISH' if e20<e50 else 'SIDEWAYS'}
+            'bias':'UNAVAILABLE' if e20 is None or e50 is None else 'BULLISH' if e20>e50 else 'BEARISH' if e20<e50 else 'SIDEWAYS',**momentum(bars)}
     return result
 
 def chain_analysis(record,clock,options=None):
@@ -124,7 +168,7 @@ def chain_analysis(record,clock,options=None):
             valid=bid is not None and ask is not None and 0<bid<=ask
             spread=100*(ask-bid)/((ask+bid)/2) if valid else None
             sid=str(d.get('security_id',''));identity=(options or {}).get(sid)
-            verified=bool(identity and identity.get('expiry')==m.get('expiry') and identity.get('strike')==strike_value and identity.get('side')==side)
+            verified=bool(identity and identity.get('expiry')==m.get('expiry') and identity.get('strike')==strike_value and identity.get('side')==side and identity.get('underlying',m.get('index'))==m.get('index'))
             greeks=d.get('greeks') or {}
             rows.append({'security_id':sid,'expiry':m.get('expiry'),'strike':strike_value,'side':side,
                 'last_price':vals['last_price'],'bid':bid,'ask':ask,'spread_pct':spread,'oi':vals['oi'],'volume':vals['volume'],
@@ -339,12 +383,13 @@ def replay_report(store,p):
             'split':'No performance claims or walk-forward statistics until contract/execution gates pass',
             'latest':setup_rules(visible,p.clock,p.setup,p.config)}
 
-def workspace(store,symbol,clock=None,options=None):
+def workspace(store,symbol,clock=None,options=None,contract_id=''):
     clock=clock or datetime.now(timezone.utc);loaded=saved_candles(store,symbol,clock)
     candles=loaded['candles'];latest=candles[-1] if candles else None
     records=store.rows('dhan_chain',40)
     chosen=next((r for r in records if r['data'].get('metadata',{}).get('index')==symbol),None)
     chain=chain_analysis(chosen['data'] if chosen else None,clock,options)
+    contract=next((c for c in chain['contracts'] if c['security_id']==contract_id),None)
     session_rows={}
     for row in candles:
         day=stamp(row['timestamp']).astimezone(IST).date().isoformat()
@@ -355,7 +400,7 @@ def workspace(store,symbol,clock=None,options=None):
             'session_quality':session_quality,
             'policies':POLICY,'history':loaded,'indicators':indicators(candles,clock),
             'latest_candle':latest,'candle_freshness':freshness(latest['closed_at'],latest['received_at'],clock,90) if latest else {'state':'MISSING'},
-            'chain':chain,'setups':[setup_rules(candles,clock,s) for s in ('opening_range','trend_pullback')],
+            'chain':chain,'selected_contract':contract,'setups':[setup_rules(candles,clock,s,contract=contract) for s in ('opening_range','trend_pullback')],
             'availability':{'breadth':'NOT_CONNECTED','events':'NOT_CONNECTED','futures_vwap':'NOT_VERIFIED',
                             'continuous_feed':'SEE_LIVE_PANEL_STATUS','iv_percentile':'HISTORY_UNVERIFIED','pcr_history':'CADENCE_UNVERIFIED'},
             'validation':{'rule_state':'UNVALIDATED','paper_trade_minimum':50,'multiple_regimes_required':True,

@@ -60,3 +60,46 @@ async def refresh_session(provider,store,board,symbol,clock=None):
     from collection import replace
     await asyncio.to_thread(replace,store,key,lambda previous:record if not previous or (stamp(previous.get('received_at')) or datetime.min.replace(tzinfo=timezone.utc))<=received else previous)
     return session_view(record,received)
+
+async def refresh_context(provider,store,board,symbol):
+    """One daily 21-calendar-day warm-up plus current-front future session data."""
+    from collection import replace
+    clock=datetime.now(timezone.utc);local=clock.astimezone(IST);day=local.date()
+    await board.catalog()
+    start=local.replace(hour=9,minute=15,second=0,microsecond=0)
+    index=board.instruments.get(symbol)
+    key='research/warmup/'+symbol;old=await asyncio.to_thread(store.document,key)
+    report={}
+    if index and (not old[0] or old[0].get('session_date')!=day.isoformat() or old[0].get('security_id')!=str(index['security_id'])):
+        body={'securityId':str(index['security_id']),'exchangeSegment':'IDX_I','instrument':'INDEX','interval':'1','oi':False,
+              'fromDate':(start-timedelta(days=21)).strftime('%Y-%m-%d %H:%M:%S'),'toDate':start.strftime('%Y-%m-%d %H:%M:%S')}
+        try:
+            raw=await provider.post('charts/intraday',body);candle_count(raw)
+            record={'symbol':symbol,'security_id':str(index['security_id']),'session_date':day.isoformat(),'received_at':datetime.now(timezone.utc).isoformat(),'request':body,'raw':raw}
+            await asyncio.to_thread(replace,store,key,lambda previous:record)
+        except ProviderError as exc:report['warmup_error']=str(exc)
+    future=board.instruments.get(symbol+'_future')
+    if not future:return {**report,'futures_vwap':{'state':'MASTER_IDENTITY_UNAVAILABLE','value':None}}
+    key='research/future/'+symbol;old=await asyncio.to_thread(store.document,key)
+    cached=old[0];at=stamp((cached or {}).get('received_at'))
+    if cached and cached.get('security_id')==str(future['security_id']) and cached.get('expiry')==future['expiry'] and at and 0<=(clock-at).total_seconds()<55:
+        return {**report,'futures_vwap':future_vwap(cached,clock)}
+    end=min(local.replace(second=0,microsecond=0),start.replace(hour=15,minute=30))
+    if day.weekday()>4 or end<=start:return {**report,'futures_vwap':{'state':'OUTSIDE_REGULAR_SESSION','value':None}}
+    body={'securityId':str(future['security_id']),'exchangeSegment':'NSE_FNO','instrument':'FUTIDX','interval':'1','oi':True,
+          'fromDate':start.strftime('%Y-%m-%d %H:%M:%S'),'toDate':end.strftime('%Y-%m-%d %H:%M:%S')}
+    try:
+        raw=await provider.post('charts/intraday',body);candle_count(raw)
+        record={'symbol':symbol,'security_id':str(future['security_id']),'expiry':future['expiry'],'session_date':day.isoformat(),
+                'received_at':datetime.now(timezone.utc).isoformat(),'request':body,'raw':raw}
+        await asyncio.to_thread(replace,store,key,lambda previous:record)
+        return {**report,'futures_vwap':future_vwap(record,datetime.now(timezone.utc))}
+    except ProviderError as exc:return {**report,'futures_vwap':{'state':'PROVIDER_ERROR','value':None,'reason':str(exc)}}
+
+def future_vwap(record,clock):
+    view=session_view(record,clock);rows=view['candles'];volume=sum(r['volume'] for r in rows)
+    valid=not view['missing_minutes'] and not view['conflicting_minutes'] and volume>0 and view['freshness']['state']=='FRESH'
+    return {'state':'FRESH_CANDLE_APPROXIMATION' if valid else 'INCOMPLETE_OR_STALE','security_id':record['security_id'],
+            'expiry':record['expiry'],'value':sum((r['high']+r['low']+r['close'])/3*r['volume'] for r in rows)/volume if valid else None,
+            'received_at':record['received_at'],'missing_minutes':view['missing_minutes'],
+            'basis':'Current exact futures contract; HLC3 × candle volume / volume. Candle approximation, not tick VWAP.'}

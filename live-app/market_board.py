@@ -47,7 +47,7 @@ def parse_master(text,today):
             try:
                 lot=float(row['LOT_SIZE']);strike=float(row['STRIKE_PRICE']);side=row['OPTION_TYPE']
                 if not lot.is_integer() or not 0<lot<=100000 or not math.isfinite(strike) or strike<=0 or side not in ('CE','PE'):continue
-                options[sid]={'security_id':sid,'expiry':expiry.isoformat(),'strike':strike,'side':side,'lot_size':int(lot)}
+                options[sid]={'security_id':sid,'expiry':expiry.isoformat(),'strike':strike,'side':side,'lot_size':int(lot),'underlying':row['UNDERLYING_SYMBOL'].lower()}
             except (ValueError,KeyError):pass
         for key,label,group,wanted,kind,exch in WATCH:
             if (symbol,inst,exchange)!=(wanted,kind,exch):continue

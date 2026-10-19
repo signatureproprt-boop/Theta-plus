@@ -23,8 +23,10 @@ from history_coverage import coverage_report
 from worker import launch_worker,worker_status
 from research import workspace, risk_plan, RiskInput, PaperNote, ReplayInput, replay_report, RULE_VERSION
 from live_research import stream as research_live_stream
-from session_chart import refresh_session
+from session_chart import refresh_session,refresh_context
 from typing import Literal
+from request_review import diagnose
+from paper_ledger import PaperOpen,PaperClose,open_trade,close_trade,view as paper_view
 ROOT=Path(__file__).parent
 class DhanTokenInput(Model):
     token: str = Field(min_length=20,max_length=4096)
@@ -80,13 +82,18 @@ def create_app(db_path=None):
     async def research_session(payload:LiveInput,request:Request):
         require_admin(request)
         if not provider.configured:raise HTTPException(503,'Dhan credentials not configured')
-        try:return await refresh_session(provider,store,board,payload.symbol)
+        try:
+            result=await refresh_session(provider,store,board,payload.symbol)
+            result['context']=await refresh_context(provider,store,board,payload.symbol)
+            result['workspace']=await asyncio.to_thread(workspace,store,payload.symbol,options=board.options)
+            return result
         except ProviderError as exc:raise HTTPException(503,str(exc)) from None
 
     @app.get('/api/research/workspace')
-    def research_workspace(symbol:str='nifty'):
+    async def research_workspace(symbol:str='nifty',contract_id:str=''):
         if symbol not in ('nifty','banknifty'):raise HTTPException(422,'Choose NIFTY or BANKNIFTY')
-        result=workspace(store,symbol,options=board.options)
+        if provider.configured:await board.catalog()
+        result=await asyncio.to_thread(workspace,store,symbol,options=board.options,contract_id=contract_id)
         result['collection']=collector.jobs()
         result['worker']=worker_status(store)
         result['credential_check']=(store.rows('credential_status',1) or [{}])[0].get('data')
@@ -96,6 +103,22 @@ def create_app(db_path=None):
     @app.post('/api/research/risk')
     def research_risk(payload:RiskInput):
         return risk_plan(payload)
+
+    @app.post('/api/research/paper/list')
+    def research_paper_view(request:Request):
+        require_admin(request)
+        return paper_view(store)
+
+    @app.post('/api/research/paper')
+    async def research_paper_open(payload:PaperOpen,request:Request):
+        require_admin(request)
+        await board.catalog()
+        return await asyncio.to_thread(open_trade,store,payload,board.options)
+
+    @app.post('/api/research/paper/{tid}/close')
+    def research_paper_close(tid:str,payload:PaperClose,request:Request):
+        require_admin(request)
+        return close_trade(store,tid,payload)
 
     @app.post('/api/research/journal')
     def research_journal_write(payload:PaperNote,request:Request):
@@ -171,6 +194,11 @@ def create_app(db_path=None):
     async def collection_run(jid:str,request:Request):
         require_admin(request)
         return await collector.run(jid)
+
+    @app.post('/api/collection/jobs/{jid}/diagnose')
+    async def collection_diagnose(jid:str,request:Request):
+        require_admin(request)
+        return await diagnose(collector,jid)
 
     @app.post('/api/collection/jobs/{jid}/{action}')
     def collection_control(jid:str,action:str,request:Request):
