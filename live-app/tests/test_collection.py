@@ -430,3 +430,59 @@ def test_rolling_boundary_spillover_is_reported_not_merged(setup):
     assert result['rows']==1 and result['outside_requested_dates']==1
     assert len(row['timestamp'])==2
     assert result['days_saved']==['2026-10-16']
+
+
+def test_continue_rejections_is_explicit_failed_outcome_not_coverage(setup):
+    c,p,s=setup
+    key=c.catalogue()['pages'][0]['key'];page,version=s.document(key)
+    s.put_document(key,{'items':[instrument(),instrument(security_id='25',symbol='BANKNIFTY')]},version)
+    jid=plan(c,continue_rejected_requests=True)
+    async def post(path,body):
+        p.calls.append((path,body))
+        if str(body['securityId'])=='13':raise ProviderError('No data or invalid parameters',code='DH-907',status=400)
+        return candles()
+    p.post=post
+    first=run(c,jid)
+    assert first['state']=='running' and first['counts']['failed']==1 and first['rows_saved']==0
+    entry=c.results(jid)['items'][0]
+    assert entry['result']['coverage']=='NOT_COLLECTED' and entry['result']['review_required']
+    assert entry['task']['item']['security_id']=='13' and entry['result']['code']=='DH-907'
+    assert run(c,jid)['counts']['completed']==1
+    last=run(c,jid);assert last['state']=='completed' and last['counts']['failed']==1
+    assert last['rows_saved']==1 and len(p.calls)==2
+
+
+def test_reviewed_rejection_can_be_recorded_and_restored_to_stop_policy(setup):
+    c,p,s=setup;jid=plan(c);p.problem=ProviderError('Rejected',code='DH-907',status=200)
+    assert run(c,jid)['state']=='request_review'
+    c.control(jid,'continue-rejected')
+    job=c.get_job(jid);assert job['state']=='paused' and job['config']['continue_rejected_requests']
+    assert job['counts']['failed']==1 and job['rows_saved']==0
+    with pytest.raises(HTTPException):c.control(jid,'continue-rejected')
+    c.control(jid,'stop-on-rejected');assert not c.get_job(jid)['config']['continue_rejected_requests']
+
+
+@pytest.mark.parametrize('code,status,state',[('DH-901',401,'token_required'),('DH-902',403,'permission_blocked'),('DH-904',429,'running')])
+def test_continue_policy_never_skips_auth_access_or_rate_limit(setup,code,status,state):
+    c,p,s=setup;jid=plan(c,continue_rejected_requests=True);p.problem=ProviderError('Blocked',code=code,status=status)
+    before=c.get_job(jid)['cursor']
+    result=run(c,jid)
+    assert result['state']==state and result['items_assessed']==0 and result['rows_saved']==0
+    assert c.get_job(jid)['cursor']==before and c.get_job(jid).get('current')
+    if status==429:assert c.get_job(jid)['retry_at']>0
+    with pytest.raises(HTTPException):c.control(jid,'continue-rejected')
+
+
+def test_disconnect_during_provider_call_releases_lease_and_keeps_checkpoint(setup):
+    import anyio
+    c,p,s=setup;jid=plan(c)
+    async def task():
+        started=anyio.Event()
+        async def post(*args):started.set();await anyio.sleep_forever()
+        p.post=post
+        async with anyio.create_task_group() as group:
+            group.start_soon(c.run,jid);await started.wait();group.cancel_scope.cancel()
+        assert s.document('control/lease')[0]['until']==0
+        job=c.get_job(jid)
+        assert job['current']['item']['security_id']=='13' and job['items_assessed']==0 and job['rows_saved']==0
+    anyio.run(task)

@@ -97,7 +97,7 @@ def quote_row(instrument,quote,now):
 class MarketBoard:
     def __init__(self,provider,store):
         self.provider=provider;self.store=store;self.lock=asyncio.Lock();self.catalog_lock=asyncio.Lock()
-        self.instruments={};self.options={};self.master_at=0.;self.attempt_at=0.;self.master_day=None
+        self.instruments={};self.options={};self.equities={};self.master_at=0.;self.attempt_at=0.;self.master_day=None
         self.error=None;self.catalog_error=None
 
     async def catalog(self):
@@ -116,6 +116,8 @@ class MarketBoard:
                     if len(raw)>100*1024*1024:raise ValueError('Instrument master exceeded size limit')
         instruments,options=await asyncio.to_thread(parse_master,raw.decode('utf-8-sig'),today)
         if not instruments:raise ValueError('No recognised instruments in master')
+        from breadth import parse_equities
+        self.equities=await asyncio.to_thread(parse_equities,raw.decode('utf-8-sig'))
         self.instruments,self.options=instruments,options
         self.master_at=time.monotonic();self.master_day=today;self.catalog_error=None
 

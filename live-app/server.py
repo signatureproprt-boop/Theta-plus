@@ -85,6 +85,8 @@ def create_app(db_path=None):
         try:
             result=await refresh_session(provider,store,board,payload.symbol)
             result['context']=await refresh_context(provider,store,board,payload.symbol)
+            from breadth import refresh as refresh_breadth
+            result['context']['breadth']=await refresh_breadth(provider,store,board,payload.symbol)
             result['workspace']=await asyncio.to_thread(workspace,store,payload.symbol,options=board.options)
             return result
         except ProviderError as exc:raise HTTPException(503,str(exc)) from None

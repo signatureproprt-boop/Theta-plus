@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  let active = null, running = false, pumping = false, background = false;
+  let active = null, running = false, pumping = false, background = false, lastJob = null;
   const families = ['daily','intraday','rolling','chain','quotes','live','depth20','depth200'];
   const labels = {daily:'Daily history',intraday:'Intraday history',rolling:'Expired options',chain:'All active expiries / chains',quotes:'Quote snapshots',live:'Live feed samples',depth20:'20-level depth samples',depth200:'200-level depth samples'};
   const get = async path => {
@@ -34,23 +34,30 @@
       <fieldset><legend>Intraday / expired-option intervals</legend><div class="collection-options">${[1,5,15,25,60].map(i=>`<label><input type="checkbox" name="collect-interval" value="${i}" checked> ${i} min</label>`).join('')}</div></fieldset>
       <p>The default range is the last five years; it does not establish full historical coverage. Daily history is requested from your chosen start date. First verify a short range for one symbol before creating a full plan. Minute and rolling history have a documented five-year horizon. Full-universe collection can take a long time and use substantial storage.</p>
       <p>Live and depth selections save one ten-second binary sample per eligible instrument. They do not provide continuous all-market recording or historical depth. Foreign-market feeds need separate verification. Complete historical session checks and continuous live recording are pending.</p>
-      <button class="button" type="submit">Create collection plan</button></form>
+      <label><input type="checkbox" id="collect-continue-rejected"> Continue other data when Dhan rejects a request; record it as failed / not collected. Token and permission errors still stop.</label><button class="button" type="submit">Create collection plan</button></form>
       <div id="collection-feedback" role="status"></div></div></article>
       <article class="card collection-card"><div class="card-head"><h2>Collection progress</h2></div><div class="card-body">
       <div id="collection-jobs"></div><button class="button secondary" id="collection-more" hidden>More jobs</button>
       <div id="collection-current" aria-live="polite">Choose a job to see progress.</div>
       <p id="collection-runner-help">Checking background worker. Saved checkpoints survive a restart or token update.</p>
       <button class="button" id="collection-resume">Resume selected job</button>
-      <button class="button secondary" id="collection-pause">Pause</button>
+      <button class="button secondary" id="collection-pause">Pause</button><button class="button secondary" id="collection-stop-on-rejected">Stop on future rejections</button>
       <button class="button secondary" id="collection-skip">Record blocked item and continue</button><button class="button secondary" id="collection-results">View results</button>
       <div id="collection-result-list"></div><button class="button secondary" id="collection-results-more" hidden>More results</button>
       </div></article>`;
   }
   let jobCursor='', resultCursor='';
   function feedback(text) { $('#collection-feedback').textContent=text; }
+  function syncPolicyButtons(){const job=lastJob;if(!job)return;
+    $('#collection-stop-on-rejected').disabled=!job.config?.continue_rejected_requests||job.state==='running';
+    $('#collection-skip').disabled=!['request_review','permission_blocked'].includes(job.state);
+    $('#collection-skip').textContent=job.state==='request_review'?'Record rejection as failed and continue other data':'Record blocked item and continue';
+    $('#collection-skip').dataset.action=job.state==='request_review'?'continue-rejected':'skip-blocked';
+  }
   function showJob(job) {
     active=job.id;
     const counts=job.counts;
+    lastJob=job;syncPolicyButtons();
     $('#collection-current').innerHTML=`<h3>${esc(job.state.replaceAll('_',' '))}</h3>
     <p>Job ${esc(job.id)} · ${esc(job.items_assessed)} work items assessed · ${esc(job.rows_saved)} rows / frames returned across batches</p>
     <div class="collection-options">${Object.entries(counts).map(([k,v])=>`<span>${esc(k)}: <b>${esc(v)}</b></span>`).join('')}</div>
@@ -103,18 +110,19 @@
     try {
       if (b.id==='catalogue-refresh') {feedback('Fetching full catalogue. Please keep this page open.'); await write('catalogue/refresh'); await refresh(); feedback('Catalogue saved.');}
       if (b.id==='collection-profile') {const profile=await write('profile/check');feedback('Data plan: '+profile.data_plan+' · Active segments: '+(profile.active_segments || 'Not reported')+' · Valid until: '+profile.data_validity_reported);}
-      if (b.id==='collection-skip') {running=false;if(active)showJob(await write('jobs/'+active+'/skip-blocked'));}
+      if (b.id==='collection-skip') {running=false;if(active){const job=await write('jobs/'+active+'/'+(b.dataset.action||'skip-blocked'));showJob(job);feedback(job.message+' Press Resume selected job to start the worker.');}}
       if (b.id==='collection-refresh') await refresh();
       if (b.id==='collection-more') await refresh(true);
       if (b.dataset.collectionJob) {running=false;active=b.dataset.collectionJob;showJob(await get('jobs/'+active));$('#collection-result-list').textContent='';$('#collection-results-more').hidden=true;}
       if (b.id==='collection-resume') {if (!active) throw Error('Select a job first.');const job=await write('jobs/'+active+'/resume');showJob(job);if(job.runner?.mode==='cloud_run_job'){background=true;running=false;feedback('Server collection started. You may close this page.');}else{running=true;void pump();}}
+      if (b.id==='collection-stop-on-rejected') {if(active)showJob(await write('jobs/'+active+'/stop-on-rejected'));}
       if (b.id==='collection-pause') {running=false;if(active)showJob(await write('jobs/'+active+'/pause'));}
       if (b.id==='collection-results') await results();
       if (b.id==='collection-results-more') await results(true);
       if (b.dataset.collectionExport) download('dhan-raw.json',await get('export/'+b.dataset.collectionExport));
       if (b.dataset.collectionRetry) {running=false;showJob(await write('retry',{job_id:active,key:b.dataset.collectionRetry}));await refresh();feedback('Retry job created. Resume when ready.');}
     } catch(ex) {feedback(ex.message);}
-    finally {b.disabled=false;}
+    finally {b.disabled=false;syncPolicyButtons();}
   });
   document.addEventListener('submit',async e=>{
     if(e.target.id!=='collection-plan') return;
@@ -122,13 +130,13 @@
     const b=e.target.querySelector('[type="submit"]');b.disabled=true;
     try {
       const split=id=>$(id).value.split(',').map(s=>s.trim()).filter(Boolean);
-      const plan={start:$('#collect-start').value,end:$('#collect-end').value,
+      const plan={continue_rejected_requests:!!$('#collect-continue-rejected').checked,start:$('#collect-start').value,end:$('#collect-end').value,
         families:[...document.querySelectorAll('[name="collect-family"]:checked')].map(n=>n.value),
         intervals:[...document.querySelectorAll('[name="collect-interval"]:checked')].map(n=>Number(n.value)),
         symbols:split('#collect-symbols'),segments:split('#collect-segments')};
       running=false;showJob(await write('jobs',plan));await refresh();feedback('Plan created. Resume selected job to begin.');
     } catch(ex) {feedback(ex.message);}
-    finally {b.disabled=false;}
+    finally {b.disabled=false;syncPolicyButtons();}
   });
   window.addEventListener('hashchange',()=>{if(location.hash!=='#collect')running=false;else refresh().catch(e=>feedback(e.message));});
   setInterval(()=>{if(background && active && location.hash==='#collect')get('jobs/'+active).then(showJob).catch(e=>feedback(e.message));},15000);

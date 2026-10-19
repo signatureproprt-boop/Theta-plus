@@ -51,6 +51,7 @@ function environment(runState='completed',options={}) {
       if(url==='/api/collection/jobs' && !opts.method)data={jobs:[],next_cursor:null};
       if(url==='/api/collection/jobs' && opts.method)data={...job};
       if(url.endsWith('/resume'))data={...job,state:'running',...(options.background?{runner:{mode:'cloud_run_job',state:'starting'}}:{})};
+      if(url.endsWith('/continue-rejected'))data={...job,config:{continue_rejected_requests:true},message:'Rejected item recorded as failed / NOT_COLLECTED'};
       if(url.endsWith('/run'))data={...job,state:runState,items_assessed:1,rows_saved:1};
       if(url==='/api/collection/jobs/'+job.id)data={...job};
       return {ok:true,status:200,text:async()=>JSON.stringify(data),json:async()=>data};
@@ -200,4 +201,17 @@ test('unknown authentication payload fails closed',async()=>{
   e.element('token-admin-password').value='fixture-admin';await e.click('admin-signin');
   await assert.rejects(e.context.window.thetaAdminRequest('research/paper/list'),/unlock/);
   assert.match(e.element('admin-login-status').textContent,/verification unavailable/);
+});
+
+test('request-review continuation uses explicit protected action and does not claim coverage',async()=>{
+ const e=environment('request_review');await e.flush();
+ e.element('token-admin-password').value='fixture-admin';await e.click('admin-signin');
+ const b=e.element('job-button');b.dataset.collectionJob=e.job.id;await e.click('job-button');await e.click('collection-resume');
+ assert.equal(e.element('collection-skip').dataset.action,'continue-rejected');
+ assert.match(e.element('collection-skip').textContent,/failed/);
+ await e.click('collection-skip');
+ const call=e.calls.find(([url])=>url.endsWith('/continue-rejected'));
+ assert.equal(call[1].headers['X-Theta-Admin-Password'],'fixture-admin');
+ assert.match(e.element('collection-feedback').textContent,/NOT_COLLECTED/);
+ assert.equal(e.element('collection-skip').disabled,true);
 });
