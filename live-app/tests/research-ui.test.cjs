@@ -128,3 +128,8 @@ test('switching setups preserves the room form and uses the selected explanation
   assert.equal((html.match(/id="research-risk"/g)||[]).length,1);
   assert.ok(!html.includes('Range edge par retest ka wait'));
 });
+test('missing spot never labels a median strike as ATM',async()=>{
+  const e=environment('research',{chain:{expiry:contract.expiry,contracts:[contract]}});await e.flush();
+  const html=e.element('page-research').innerHTML;
+  assert.match(html,/Spot unavailable/);assert.ok(!html.includes('<small>ATM</small>'));
+});
