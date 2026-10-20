@@ -42,12 +42,13 @@ History job `017da95145a744058f217e2382631726` remained running. New quote job: 
 
 ## Screen architecture
 
-Use a dense terminal, not a page of large metric cards.
+Use a dense terminal, not a page of large metric cards. The user-supplied Dhan screenshot is the current visual reference: light theme, top navigation, a thin index strip, persistent left watchlist and compact central panels. Home opens a market overview; Trading Room opens the chart/chain/contract layout. No portfolio amounts, market rankings or source data are fabricated in the preview.
 
 | Region | Desktop target | Content |
 |---|---|---|
 | Header | 40–48 px | Global instrument search; selected exchange; data/session status; token warning |
-| Left rail | 52–64 px | Markets, Charts, Options, Futures, Paper, Data operations |
+| Top navigation | Within header | Home, Trading Room, Data Quality and architecture preview; production adds verified market/account routes |
+| Index strip | Compact row | NIFTY, next-50, bank index, VIX and other verified index observations |
 | Market watch | 165–200 px | Search results/watchlists; symbol, LTP, change and freshness; segment filters |
 | Main workspace | Flexible | Chart above, tabbed chain/OI/depth/contract-history below |
 | Right inspector | 210–260 px | Exact contract, setup reasons, entry/stop/target, costs, rupee risk, paper action |

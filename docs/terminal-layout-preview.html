@@ -97,24 +97,76 @@
     @media(max-width:560px){#theta-market-design .tp-shell{display:block}#theta-market-design .tp-watch{border-right:0;border-bottom:1px solid var(--tp-line)}#theta-market-design .tp-list{display:grid;grid-template-columns:1fr 1fr}#theta-market-design .tp-inspector{display:block}#theta-market-design .tp-risk{margin-top:16px}#theta-market-design .tp-data-grid{grid-template-columns:1fr}#theta-market-design .tp-top input{flex-basis:100%}}
     @media(pointer:coarse){#theta-market-design button{min-height:44px}#theta-market-design input,#theta-market-design select{min-height:44px;font-size:16px}}
   </style>
-  <div class="tp-top"><span class="tp-brand">θ theta+</span><input id="tp-search" aria-label="Search preview instrument list" placeholder="Search all instruments · symbol / exchange / expiry"><span class="tp-label">Proposed design · no live connection</span></div>
-  <div class="tp-nav" role="group" aria-label="Design views"><button data-view="terminal" aria-pressed="true">Terminal layout</button><button data-view="architecture" aria-pressed="false">Data architecture</button><button data-view="coverage" aria-pressed="false">Coverage & gaps</button></div>
+  <style>
+    #theta-market-design{color-scheme:light;--tp-bg:#f9fafb;--tp-panel:#ffffff;--tp-line:#e7ebed;--tp-text:#3c474c;--tp-muted:#67757d;--tp-accent:#128566;--tp-soft:#edf7f2;border-radius:4px}
+    #theta-market-design .tp-top{background:var(--tp-panel);padding:0 12px;min-height:46px;gap:20px}
+    #theta-market-design .tp-top .tp-nav{padding:0;border:0;flex:1;gap:6px}
+    #theta-market-design .tp-top .tp-nav button{border:0;border-radius:0;background:transparent;min-height:44px;padding:8px 7px;font-size:12px}
+    #theta-market-design .tp-top .tp-nav button[aria-pressed=true]{color:var(--tp-accent);border-bottom:2px solid var(--tp-accent)}
+    #theta-market-design .tp-index-strip{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));background:var(--tp-panel);padding:8px 4px;border-bottom:1px solid var(--tp-line);font-size:11px}
+    #theta-market-design .tp-index-strip div{padding:0 10px;border-right:1px solid var(--tp-line);display:flex;gap:6px;justify-content:space-between;flex-wrap:wrap}
+    #theta-market-design .tp-index-strip span{color:var(--tp-muted)}
+    #theta-market-design .tp-watch{background:var(--tp-panel)}
+    #theta-market-design .tp-search-wrap{padding:10px 8px 5px}
+    #theta-market-design .tp-search-wrap input{width:100%;font-size:12px;padding:7px}
+    #theta-market-design .tp-shell.tp-home-mode{grid-template-columns:200px minmax(0,1fr)}
+    #theta-market-design .tp-watchlist-tabs{display:flex;gap:5px;padding:5px 10px 9px;font-size:11px}
+    #theta-market-design .tp-watchlist-tabs span{border:1px solid var(--tp-line);border-radius:3px;padding:1px 5px}
+    #theta-market-design .tp-watchlist-tabs span:first-child{background:var(--tp-soft);color:var(--tp-accent)}
+    #theta-market-design .tp-home-content{padding:12px;min-width:0}
+    #theta-market-design .tp-note{padding:8px 10px;background:#fffbf3;border:1px solid #f1eadb;border-radius:4px;font-size:11px;color:#746548;margin-bottom:10px}
+    #theta-market-design .tp-home-panel{background:var(--tp-panel);border:1px solid var(--tp-line);border-radius:5px;margin-bottom:10px}
+    #theta-market-design .tp-home-panel h3{font-size:13px;font-weight:500;margin:0;padding:9px 11px;border-bottom:1px solid var(--tp-line)}
+    #theta-market-design .tp-home-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;padding:11px}
+    #theta-market-design .tp-home-summary span{display:block;font-size:11px;color:var(--tp-muted)}
+    #theta-market-design .tp-home-summary strong{font-size:14px;font-weight:500;display:block;margin-top:3px}
+    #theta-market-design .tp-home-columns{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:10px;align-items:start}
+    #theta-market-design .tp-market-links{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:2px;padding:8px}
+    #theta-market-design .tp-market-links button{border:0;text-align:left;padding:9px 6px;background:transparent;font-size:12px}
+    #theta-market-design .tp-market-links button:hover{background:var(--tp-soft)}
+    #theta-market-design .tp-subtabs{display:flex;gap:5px;padding:8px 10px;flex-wrap:wrap}
+    #theta-market-design .tp-subtabs button{font-size:11px;padding:3px 6px}
+    #theta-market-design .tp-home-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;padding:8px 11px;border-top:1px solid var(--tp-line);font-size:12px}
+    #theta-market-design .tp-home-row small{color:var(--tp-muted);font-size:11px}
+    #theta-market-design .tp-home-status{padding:9px 11px;border-top:1px solid var(--tp-line);font-size:11px;color:var(--tp-muted)}
+    @media(max-width:700px){#theta-market-design .tp-top{gap:8px}#theta-market-design .tp-index-strip{grid-template-columns:repeat(3,minmax(0,1fr));gap:7px 0}#theta-market-design .tp-shell.tp-home-mode{grid-template-columns:165px minmax(0,1fr)}#theta-market-design .tp-home-columns{grid-template-columns:1fr}#theta-market-design .tp-home-summary{grid-template-columns:1fr 1fr}}
+    @media(max-width:560px){#theta-market-design .tp-shell.tp-home-mode{display:block}#theta-market-design .tp-top .tp-nav{flex-basis:100%}#theta-market-design .tp-top>.tp-label{display:none}#theta-market-design .tp-market-links{grid-template-columns:1fr 1fr}}
+  </style>
+  <div class="tp-top"><span class="tp-brand">θ theta+</span><div class="tp-nav" role="group" aria-label="Design views"><button data-view="home" aria-pressed="true">Home</button><button data-view="terminal" aria-pressed="false">Trading Room</button><button data-view="coverage" aria-pressed="false">Data Quality</button><button data-view="architecture" aria-pressed="false">Architecture</button></div><span class="tp-label">Design preview · not live</span></div>
+  <div class="tp-index-strip" aria-label="Index strip layout"><div>NIFTY 50 <span>—</span></div><div>NIFTY NEXT 50 <span>—</span></div><div>BANK NIFTY <span>—</span></div><div>INDIA VIX <span>—</span></div><div>FIN NIFTY <span>—</span></div></div>
   <div id="tp-terminal">
-    <div class="tp-shell">
+    <div class="tp-shell tp-home-mode">
       <aside class="tp-watch" aria-label="Market watch design">
-        <div class="tp-section-title">Markets <span class="tp-label">All symbols</span></div>
+        <div class="tp-search-wrap"><input id="tp-search" aria-label="Search preview instrument list" placeholder="Search instruments"></div>
+        <div class="tp-section-title">First watchlist <span class="tp-label">▾</span></div>
+        <div class="tp-watchlist-tabs" aria-label="Watchlist group placement"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span></div>
         <div class="tp-segments" role="group" aria-label="Instrument segment"><button data-segment="indices" aria-pressed="true">Indices</button><button data-segment="equity" aria-pressed="false">Equity</button><button data-segment="futures" aria-pressed="false">Futures</button><button data-segment="commodity" aria-pressed="false">Commodity</button><button data-segment="currency" aria-pressed="false">Currency</button></div>
         <div id="tp-watchlist" class="tp-list"></div>
         <div class="tp-selected" style="padding:12px">Preview list only · production search must use the full master.</div>
       </aside>
       <section class="tp-workspace" aria-label="Chart and chain design">
+        <div id="tp-home-content" class="tp-home-content">
+          <div class="tp-note">Reference layout · market values require verified provider data. No live prices are shown in this preview.</div>
+          <div class="tp-home-panel"><h3>Market overview</h3><div class="tp-home-summary"><div><span>Market breadth</span><strong>—</strong></div><div><span>Futures activity</span><strong>—</strong></div><div><span>Options positioning</span><strong>—</strong></div><div><span>Volatility</span><strong>—</strong></div></div><div class="tp-home-status">Data source · DhanHQ &nbsp; / &nbsp; Session clock · required &nbsp; / &nbsp; Status · preview</div></div>
+          <div class="tp-home-columns"><div>
+            <div class="tp-home-panel"><h3>Explore markets</h3><div class="tp-market-links"><button data-open-segment="equity">Equities</button><button data-open-segment="equity">ETFs</button><button data-open-segment="indices">Indices</button><button data-open-segment="indices" data-open-pane="chain">Options</button><button data-open-segment="futures">Futures</button><button data-open-segment="commodity">Commodities</button><button data-open-segment="currency">Currency</button></div></div>
+            <div class="tp-home-panel"><h3>Research workspace</h3><div class="tp-home-row"><span>Chart + option chain</span><button data-open-terminal="true">Open</button></div><div class="tp-home-row"><span>OI / PCR comparison</span><button data-open-terminal="true" data-open-pane="oi">Open</button></div><div class="tp-home-row"><span>Exact contract + ₹ risk</span><button data-open-terminal="true">Open</button></div><div class="tp-home-status">Paper observations · broker execution disabled</div></div>
+            <div class="tp-home-panel"><h3>Data coverage</h3><div class="tp-home-row"><span>Instrument master</span><small>Versioned catalogue</small></div><div class="tp-home-row"><span>Historical candles</span><small>Coverage verification pending</small></div><div class="tp-home-row"><span>Quotes / option chains</span><small>Snapshot provenance required</small></div><div class="tp-home-row"><span>Live / depth recorder</span><small>Proposed architecture</small></div></div>
+          </div><div>
+            <div class="tp-home-panel"><h3>Market movers</h3><div class="tp-subtabs" role="group" aria-label="Market movers preview"><button data-mover="Gainers" aria-pressed="true">Gainers</button><button data-mover="Losers" aria-pressed="false">Losers</button><button data-mover="Volume" aria-pressed="false">Volume</button></div><div class="tp-home-row"><span id="tp-mover-state">Gainers · snapshot required</span><span>—</span></div><div class="tp-home-row"><small>Symbol</small><small>LTP / change</small></div><div class="tp-home-row"><span>—</span><span>—</span></div><div class="tp-home-row"><span>—</span><span>—</span></div></div>
+            <div class="tp-home-panel"><h3>Options overview</h3><div class="tp-home-row"><span>Underlying / expiry</span><span>—</span></div><div class="tp-home-row"><span>OI PCR / volume PCR</span><span>—</span></div><div class="tp-home-row"><span>Max OI / daily ΔOI</span><span>—</span></div><div class="tp-home-row"><span>Spread / liquidity</span><span>—</span></div></div>
+            <div class="tp-home-panel"><h3>Context sources</h3><div class="tp-home-row"><span>News / fundamentals</span><small>Source not connected</small></div><div class="tp-home-row"><span>Economic events</span><small>Source not connected</small></div><div class="tp-home-status">No inferred news, portfolio balances or rankings</div></div>
+          </div></div>
+        </div>
+        <div id="tp-trading-content" hidden>
         <div class="tp-workspace-bar"><strong id="tp-symbol" style="font-weight:500">NIFTY</strong><span class="tp-label" id="tp-identity">NSE · INDEX · ID 13</span><span class="tp-label">Price — · quote time —</span></div>
         <div class="tp-times" role="group" aria-label="Chart interval"><button data-interval="1m" aria-pressed="false">1m</button><button data-interval="5m" aria-pressed="true">5m</button><button data-interval="15m" aria-pressed="false">15m</button><button data-interval="1H" aria-pressed="false">1H</button><button data-interval="1D" aria-pressed="false">1D</button><span>EMA · Levels · Futures VWAP</span></div>
         <div class="tp-chart" role="img" aria-label="Chart placement with no market prices drawn"><div class="tp-chart-note"><strong id="tp-chart-label">NIFTY · 5m chart</strong><span>Provider candles + gap markers<br>No illustrative prices or signals</span></div></div>
         <div class="tp-pane-nav" role="group" aria-label="Analysis pane"><button data-pane="chain" aria-pressed="true">Option chain</button><button data-pane="oi" aria-pressed="false">OI / PCR</button><button data-pane="depth" aria-pressed="false">Depth</button><button data-pane="history" aria-pressed="false">History</button></div>
         <div class="tp-pane"><div class="tp-chain-meta"><label class="tp-label">Expiry <select id="tp-expiry" aria-label="Preview expiry"><option>Select verified expiry</option></select></label><span class="tp-label">OI PCR — · Vol PCR —</span></div><div id="tp-analysis-content"></div></div>
+        </div>
       </section>
-      <aside class="tp-inspector" aria-label="Contract and risk inspector design">
+      <aside class="tp-inspector" aria-label="Contract and risk inspector design" hidden>
         <div><h3>Selected contract</h3><div class="tp-contract">Expiry / strike / CE–PE / ID / lot<br>Retained until you change selection</div><span class="tp-status">NO CONTRACT SELECTED</span><div class="tp-pair"><span>Premium · bid / ask</span><span>—</span></div><div class="tp-pair"><span>Spread / liquidity</span><span>—</span></div><div class="tp-pair"><span>OI / ΔOI</span><span>—</span></div><div class="tp-pair"><span>IV / Greeks eligibility</span><span>—</span></div><h3 style="margin-top:16px">Setup evidence</h3><div class="tp-pair"><span>Price pattern</span><span>Unavailable</span></div><div class="tp-pair"><span>Trade eligibility</span><span>Blocked</span></div><div class="tp-selected">Trigger · underlying invalidation · reason codes</div></div>
         <div class="tp-risk"><h3>Premium → ₹ risk</h3><label>Entry / stop / target<input disabled placeholder="User assumptions + exact contract"></label><label>Costs / ₹ budget / daily cap<input disabled placeholder="Explicit inputs required"></label><div class="tp-pair"><span>Lots / quantity</span><span>—</span></div><div class="tp-pair"><span>Planned loss / net R:R</span><span>—</span></div><button disabled>Prepare paper record</button><div class="tp-selected">Preview only · no order action</div></div>
       </aside>
@@ -145,7 +197,10 @@
       function heading(){root.querySelector('#tp-symbol').textContent=selected;root.querySelector('#tp-chart-label').textContent=selected+' · '+interval+' chart';}
       function watch(){const q=root.querySelector('#tp-search').value.toLowerCase();const box=root.querySelector('#tp-watchlist');box.replaceChildren();let found=0;for(const [name,id] of groups[segment]){if(!(name+' '+id).toLowerCase().includes(q))continue;found++;const b=document.createElement('button');b.className='tp-instrument';b.setAttribute('aria-pressed',String(name===selected));const label=document.createElement('span');label.textContent=name;const price=document.createElement('span');price.textContent='—';const meta=document.createElement('small');meta.textContent=id;b.append(label,price,meta);b.addEventListener('click',()=>{selected=name;root.querySelector('#tp-identity').textContent=id;heading();watch();});box.append(b);}if(!found){const no=document.createElement('div');no.className='tp-selected';no.textContent='No match in this preview list';box.append(no);}}
       function analysis(){const box=root.querySelector('#tp-analysis-content');if(pane==='chain'){box.innerHTML='<div class="tp-table-wrap"><table><thead><tr><th>CE OI</th><th>CE ΔOI</th><th>CE bid / ask</th><th class="tp-strike">Strike</th><th>PE bid / ask</th><th>PE ΔOI</th><th>PE OI</th></tr></thead><tbody>'+['ATM − 2','ATM − 1','ATM','ATM + 1','ATM + 2'].map(s=>'<tr><td>—</td><td>—</td><td>—</td><td class="tp-strike">'+s+'</td><td>—</td><td>—</td><td>—</td></tr>').join('')+'</tbody></table></div><div class="tp-selected">All strikes retained · selected expiry · same snapshot clock · click CE/PE premium to lock a contract</div>';}else{const copy={oi:'OI bars · daily ΔOI · expiry-specific PCR · actual snapshot history only',depth:'Exact instrument · verified depth entitlement · independent timestamp',history:'Requested range · returned range · gaps · conflicts · raw response lineage'};box.replaceChildren();const p=document.createElement('div');p.className='tp-empty';p.textContent=copy[pane];box.append(p);}}
-      root.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>{press('[data-view]',b);['terminal','architecture','coverage'].forEach(v=>root.querySelector('#tp-'+v).hidden=v!==b.dataset.view);}));
+      function view(v){root.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.view===v)));root.querySelector('#tp-terminal').hidden=!['home','terminal'].includes(v);root.querySelector('#tp-home-content').hidden=v!=='home';root.querySelector('#tp-trading-content').hidden=v!=='terminal';root.querySelector('.tp-inspector').hidden=v!=='terminal';root.querySelector('.tp-shell').classList.toggle('tp-home-mode',v==='home');['architecture','coverage'].forEach(k=>root.querySelector('#tp-'+k).hidden=v!==k);}
+      root.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>view(b.dataset.view)));
+      root.querySelectorAll('[data-open-segment],[data-open-terminal]').forEach(b=>b.addEventListener('click',()=>{if(b.dataset.openSegment){segment=b.dataset.openSegment;selected=groups[segment][0][0];root.querySelector('#tp-identity').textContent=groups[segment][0][1];root.querySelector('#tp-search').value='';root.querySelectorAll('[data-segment]').forEach(s=>s.setAttribute('aria-pressed',String(s.dataset.segment===segment)));heading();watch();}if(b.dataset.openPane){pane=b.dataset.openPane;root.querySelectorAll('[data-pane]').forEach(p=>p.setAttribute('aria-pressed',String(p.dataset.pane===pane)));analysis();}view('terminal');}));
+      root.querySelectorAll('[data-mover]').forEach(b=>b.addEventListener('click',()=>{press('[data-mover]',b);root.querySelector('#tp-mover-state').textContent=b.dataset.mover+' · snapshot required';}));
       root.querySelectorAll('[data-segment]').forEach(b=>b.addEventListener('click',()=>{segment=b.dataset.segment;press('[data-segment]',b);root.querySelector('#tp-search').value='';selected=groups[segment][0][0];root.querySelector('#tp-identity').textContent=groups[segment][0][1];heading();watch();}));
       root.querySelectorAll('[data-interval]').forEach(b=>b.addEventListener('click',()=>{interval=b.dataset.interval;press('[data-interval]',b);heading();}));
       root.querySelectorAll('[data-pane]').forEach(b=>b.addEventListener('click',()=>{pane=b.dataset.pane;press('[data-pane]',b);analysis();}));
