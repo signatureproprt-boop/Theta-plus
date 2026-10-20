@@ -20,7 +20,7 @@ def bars(n=40):
     return [dict(timestamp=base+i*60,open=100+i,high=102+i,low=99+i,close=101+i,volume=100) for i in range(n)]
 def raw(rows):return {k:[r[k] for r in rows] for k in ('timestamp','open','high','low','close','volume')}
 def risk():
-    return RiskInput(entry=100,stop=90,risk_rupees=2000,capital=100000,daily_loss_cap=5000,realised_loss=0,open_risk=0,
+    return RiskInput(entry=100,stop=90,target=120,risk_rupees=2000,capital=100000,daily_loss_cap=5000,realised_loss=0,open_risk=0,
         lot_size=75,lot_source='exchange master',lot_verified_on=date(2026,10,12),brokerage_roundtrip=40,
         exchange_roundtrip_per_lot=5,stt_exit_rate=.0015,sebi_turnover_rate=.000001,gst_rate=.18,stamp_entry_rate=.00003,
         slippage_per_unit=1,spread_per_unit=.5,costs_effective_on=date(2026,10,1),costs_source='explicit test assumptions',expiry=date(2026,10,15))
@@ -104,3 +104,47 @@ def test_paper_read_and_writes_require_existing_admin(tmp_path,monkeypatch):
     c=TestClient(server.create_app(tmp_path/'a.db'))
     assert c.post('/api/research/paper/list',json={}).status_code==503
     assert c.post('/api/research/paper',json=opening().model_dump(mode='json')).status_code==503
+
+
+def test_new_paper_entry_requires_target_and_retains_fixed_stop_target(tmp_path):
+    s=Store(tmp_path/'target.db');p=opening();p.risk.target=None
+    with pytest.raises(HTTPException,match='explicit premium target'):open_trade(s,p,master(),clock())
+    p.risk.target=120;t=open_trade(s,p,master(),clock())
+    assert (t['stop_premium'],t['target_premium'])==(90,120)
+    result=close_trade(s,p.id,PaperClose(exit_premium=120,reason='Explicit target scenario'),clock()+timedelta(minutes=1))
+    report=view(s)
+    assert result['hypothetical_net_pnl']==2688.51
+    assert result['realised_r']==pytest.approx(result['hypothetical_net_pnl']/t['risk_plan']['planned_stop_loss'],abs=.0001)
+    assert report['metrics']['expectancy_rupees']==2688.51
+    assert report['metrics']['closed_trades']==1 and not report['metrics']['validated']
+    assert report['validated_trades']==0
+
+
+def test_hypothetical_drawdown_uses_exit_order_and_costs_are_not_subtracted_twice():
+    from paper_ledger import hypothetical_metrics
+    def trade(tid,minute,net,reserve):return dict(id=tid,closed_at=f'2026-10-12T10:{minute}:00+05:30',hypothetical_net_pnl=net,risk_plan={'planned_stop_loss':reserve})
+    m=hypothetical_metrics([trade('a','10',100,50),trade('b','05',-40,40),trade('c','15',-80,80)])
+    assert m['max_drawdown_rupees']==80 and m['expectancy_rupees']==-6.67
+    assert m['average_r']==0 and m['profit_factor']==.8333 and m['win_rate']==.3333
+    assert hypothetical_metrics([])['expectancy_rupees'] is None
+
+
+def test_full_api_risk_to_exact_contract_paper_close_and_evaluation(tmp_path,monkeypatch):
+    from runtime import IST
+    today=datetime.now(IST).date();p=opening();p.risk.lot_verified_on=today;p.risk.expiry=today+timedelta(days=7)
+    contracts=master();contracts['123']['expiry']=p.risk.expiry.isoformat()
+    async def catalog():pass
+    monkeypatch.setenv('THETA_AUTH_MODE','public')
+    for key in ('K_SERVICE','THETA_GCS_BUCKET'):monkeypatch.delenv(key,raising=False)
+    monkeypatch.setattr(server,'require_admin',lambda request:'test-authorized')
+    monkeypatch.setattr(server,'MarketBoard',lambda *args:SimpleNamespace(catalog=catalog,options=contracts))
+    client=TestClient(server.create_app(tmp_path/'flow.db'))
+    plan=client.post('/api/research/risk',json=p.risk.model_dump(mode='json'))
+    assert plan.status_code==200 and plan.json()['target_premium']==120
+    opened=client.post('/api/research/paper',json=p.model_dump(mode='json'))
+    assert opened.status_code==200 and opened.json()['contract']['security_id']=='123'
+    closed=client.post('/api/research/paper/'+p.id+'/close',json={'exit_premium':120,'reason':'Manual target scenario','deviations':''})
+    assert closed.status_code==200
+    ledger=client.post('/api/research/paper/list',json={}).json()
+    assert ledger['metrics']['expectancy_rupees']==closed.json()['hypothetical_net_pnl']
+    assert ledger['trades'][0]['target_premium']==120 and ledger['validated_trades']==0

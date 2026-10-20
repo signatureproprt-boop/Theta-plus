@@ -1,4 +1,4 @@
-# Trading Room readiness — 3.6.3
+# Trading Room readiness — 3.7.0
 
 The room is research software, not a validated entry recommendation.
 
@@ -41,3 +41,15 @@ Other confirmed defects fixed: failed selected-contract refresh invalidates earl
 Deployment now reads both actual Trading Room workspace APIs and checks their identity/evidence/setup schema. HTTP 500 or missing setup evidence fails rollout and triggers the existing traffic rollback. Health identity alone is insufficient.
 
 Operational and strategy sign-off remain open: an authorised fresh event source, independently timestamped quote eligibility, market-hour stream/candle/breadth verification, historical failure investigation, exact-contract execution history, and actual forward validation. Unit/UI tests are not a substitute for those checks.
+
+## Research-to-paper workflow — 3.7.0
+
+The shared setup evaluator now emits two explicit outputs. `price_pattern` reports closed-candle structure/alignment/trigger progress. The existing strict `state` still includes event, breadth, quote freshness, liquidity and room-to-level checks. A price trigger is not an entry recommendation and does not upgrade missing quote/event evidence. Current stale candles do not become a current price trigger.
+
+The chart shows observed underlying structure, trigger and invalidation levels for its displayed session; these are never option premium stops. Risk planning takes an explicit premium stop and target and computes target reward net of exit-specific saved cost assumptions. A new hypothetical paper entry requires that target, exact master identity and a sized plan. Stop, target, selected setup and full evidence snapshot are retained.
+
+Closing an assumed paper trade computes net P&L and R from the saved plan. The protected ledger reports clearly labelled hypothetical win rate, net expectancy, average R, profit factor and exit-ordered drawdown. Empty samples stay unavailable and validated-trade counts remain zero. No fake forward trades or automated fills are created.
+
+Underlying replay shares the price-pattern evaluator and only passes closed-bar prefixes. Its pattern view explicitly assumes bar availability at close; actual ingestion timing/revisions and exact-option executions are not simulated. Strict timestamp eligibility is retained independently.
+
+Validation includes a full API integration scenario from risk plan to exact-contract paper entry, close and ledger metrics, plus regressions for the independent price/evidence states, stale-candle rejection, explicit targets, net costs and exit-ordered drawdown. Production deployment and real market-hour delivery still require verification.

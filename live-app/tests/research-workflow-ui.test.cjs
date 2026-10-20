@@ -13,8 +13,8 @@ function environment(current='risk',selected=null){
 }
 test('only a sized risk plan offers the paper-journal transition',()=>{
   const e=environment();e.context.window.thetaPaperPlanReady({plan:{state:'NO_TRADE'}});
-  assert.match(e.nodes.get('paper-plan-result').innerHTML,/blocked/);
-  e.context.window.thetaPaperPlanReady({plan:{state:'SIZED',lots:2},risk:{},contract:{identity_verified:true}});
+  assert.match(e.nodes.get('paper-plan-result').innerHTML,/explicit premium stop and target/);
+  e.context.window.thetaPaperPlanReady({plan:{state:'SIZED',lots:2},risk:{entry:100,stop:90,target:120},contract:{identity_verified:true}});
   e.nodes.get('paper-use-plan').onclick();assert.equal(e.context.location.hash,'#paper');
   assert.ok(e.calls.some(c=>c.show==='paper'));assert.ok(!e.calls.some(c=>c.path==='research/paper'));
 });
@@ -33,7 +33,11 @@ test('contract labels cannot inject markup and momentum is context only',()=>{
 });
 test('trend-pullback plan stays selected in Paper Journal instead of defaulting to ORB',async()=>{
  const e=environment('paper');await e.flush();
- e.context.window.thetaPaperPlanReady({setup:'trend_pullback',symbol:'nifty',plan:{state:'SIZED',lots:1,quantity:65},risk:{entry:100},contract:{identity_verified:true,strike:23000,side:'CE',expiry:'2026-10-27'}});
+ e.context.window.thetaPaperPlanReady({setup:'trend_pullback',symbol:'nifty',plan:{state:'SIZED',lots:1,quantity:65},risk:{entry:100,stop:90,target:120},contract:{identity_verified:true,strike:23000,side:'CE',expiry:'2026-10-27'}});
  e.context.window.thetaWorkflowMount();
  assert.match(e.nodes.get('paper-trade-panel').innerHTML,/value="trend_pullback" selected/);
+});
+test('paper transition requires exact contract and explicit premium target',()=>{
+ const e=environment();e.context.window.thetaPaperPlanReady({plan:{state:'SIZED',lots:1},risk:{entry:100,stop:90},contract:{identity_verified:true}});
+ assert.ok(!e.nodes.get('paper-plan-result').innerHTML.includes('id="paper-use-plan"'));
 });

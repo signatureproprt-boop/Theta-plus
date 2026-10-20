@@ -203,3 +203,9 @@ test('transient workspace GET retries once, without replaying writes',async()=>{
   await e.element('research-refresh').onclick();await e.flush();
   assert.equal(calls,2);assert.equal(e.element('research-message').textContent,'');
 });
+test('price trigger progress and strict missing evidence render separately beside explicit target planning',async()=>{
+ const e=environment('research',{setups:[{setup:'opening_range',state:'DATA_UNAVAILABLE',missing:['EVENT_CONTEXT_UNAVAILABLE'],reason_codes:['EVENT_CONTEXT_UNAVAILABLE'],price_pattern:{state:'TRIGGER_OBSERVED',side:'CE',basis:'Closed underlying candles only',reason_codes:['FRESH_TRIGGER_OK']}}]});await e.flush();
+ const html=e.element('page-research').innerHTML;
+ assert.match(html,/Price trigger observed · research only/);assert.match(html,/Evidence eligibility/);assert.match(html,/WAIT · Data incomplete/);
+ assert.match(html,/name="target"/);assert.match(html,/event-calendar source is not connected/);
+});
