@@ -94,6 +94,10 @@ def test_diagnosis_preserves_checkpoint_and_reports_ambiguous_907(tmp_path):
     class Provider:
         async def post(self,*args):raise ProviderError('No data or wrong parameters',code='DH-907',status=400)
     collector=SimpleNamespace(store=s,provider=Provider(),get_job=lambda _:deepcopy(job),catalogue=lambda:{'pages':[{'group':'IDX_I-INDEX','key':'page'}]})
+    from collection import Collector
+    controls=Collector(collector.provider,s)
+    async def call(owner,path,body):return await collector.provider.post(path,body)
+    collector.acquire=controls.acquire;collector.release=controls.release;collector.call=call
     result=asyncio.run(diagnose(collector,'a'*32))
     assert len(result['probes'])==2 and result['conclusion']=='SOURCE_REQUEST_REMAINS_UNRESOLVED'
     assert s.document('jobs/'+'a'*32)[0]==job and result['checkpoint_changed'] is False

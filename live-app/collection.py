@@ -27,13 +27,14 @@ from models import Model
 from runtime import IST
 from provider import ProviderError
 from market_board import MASTER_URL
+from collection_contracts import chain_universe,quote_probe_items,quote_values
 
 FAMILIES = ('daily', 'intraday', 'rolling', 'chain', 'quotes', 'live', 'depth20', 'depth200')
 SEGMENTS = {('NSE','E'):'NSE_EQ', ('BSE','E'):'BSE_EQ',
             ('NSE','D'):'NSE_FNO', ('BSE','D'):'BSE_FNO',
             ('NSE','C'):'NSE_CURRENCY', ('BSE','C'):'BSE_CURRENCY',
             ('MCX','M'):'MCX_COMM', ('NSE','I'):'IDX_I', ('BSE','I'):'IDX_I'}
-TERMINAL = {'completed','empty','unsupported','failed','permission_blocked'}
+TERMINAL = {'completed','partial','empty','unsupported','failed','permission_blocked'}
 AUTH_CODES = {'807','808','809','810','DH-901'}
 ACCESS_CODES = {'806','DH-902','DH-903'}
 SHARD_SIZE = 1000
@@ -123,6 +124,7 @@ class Collector:
     def __init__(self,provider,store):
         self.provider=provider
         self.store=store
+        self.chain_cache={}
 
     @lru_cache(maxsize=16)
     def page_items(self,key):
@@ -207,6 +209,47 @@ class Collector:
         return {**info,**self.store.document(info['key'])[0],
                 'next_page':page+1 if page+1<len(cat['pages']) else None}
 
+    def chain_pages(self,cat):
+        cache_key=(cat['sha256'],datetime.now(IST).date().isoformat())
+        if cache_key in self.chain_cache:return self.chain_cache[cache_key]
+        root='catalogue/'+cat['sha256']+'/chain-v2/'+cache_key[1]
+        manifest=self.store.document(root+'/manifest')[0]
+        if manifest is None:
+            items=[]
+            for page in cat['pages']:
+                if page['group']=='rolling-underlyings':continue
+                items.extend(self.page_items(page['key']))
+            entries,discovery=chain_universe(items,datetime.now(IST).date())
+            pages=[]
+            for offset in range(0,len(entries),SHARD_SIZE):
+                key=root+'/pages/'+str(len(pages)).zfill(5)
+                install_once(self.store,key,{'items':entries[offset:offset+SHARD_SIZE]})
+                pages.append({'key':key,'group':'chain-underlyings','count':len(entries[offset:offset+SHARD_SIZE])})
+            manifest=install_once(self.store,root+'/manifest',{'pages':pages,'discovery':discovery})
+        self.chain_cache[cache_key]=manifest
+        return manifest
+
+    def upgrade_chain_job(self,job):
+        # Upgrade only at a safe task boundary. Existing raw data, outcomes and
+        # unrelated family cursors stay intact; pending expiry children finish first.
+        c=job['cursor'];pages=job['pages']
+        if (job.get('chain_planner_version')==2 or job.get('current') or job.get('chain_pending') or
+            c['page']>=len(pages) or pages[c['page']]['family']!='chain'):return
+        cat=self.store.document('catalogue/'+job['catalogue_sha256']+'/manifest')[0]
+        if cat is None:
+            cat=self.catalogue()
+            if not cat or cat['sha256']!=job['catalogue_sha256']:return
+        planned=self.chain_pages(cat);new=[];start=None
+        for page in pages:
+            if page['family']=='chain':
+                if start is None:
+                    start=len(new);new.extend({**p,'family':'chain'} for p in planned['pages'])
+            else:new.append(page)
+        job['chain_planner_upgrade']={'at':now(),'old_cursor':dict(c),'outcomes_retained':job['items_assessed'],
+                                      'note':'Underlying discovery rebuilt; prior snapshots remain retained, not coverage certification.'}
+        job['pages']=new;job['cursor']={'page':start,'item':0,'variant':0,'window':0}
+        job['chain_planner_version']=2;job['chain_discovery']=planned['discovery']
+
     def create(self,plan):
         cat=self.catalogue()
         if not cat:raise HTTPException(409,'Refresh instrument catalogue first')
@@ -214,6 +257,9 @@ class Collector:
         # Preserve every entry; filters select groups, never silently rewrite master.
         pages=[]
         for family in config['families']:
+            if family=='chain':
+                pages.extend({**p,'family':family} for p in self.chain_pages(cat)['pages'])
+                continue
             for p in sorted(cat['pages'],key=lambda p:(0 if p['group']=='IDX_I-INDEX' else 1 if p['group'].startswith('NSE_EQ-') else 2,p['key'])):
                 rolling=p['group']=='rolling-underlyings'
                 if (family=='rolling')!=rolling:continue
@@ -223,7 +269,8 @@ class Collector:
              'pages':pages,'cursor':{'page':0,'item':0,'variant':0,'window':0},
              'counts':{s:0 for s in TERMINAL},'rows_saved':0,'items_assessed':0,
              'provider_calls':0,'message':'Ready. Resume to collect. Runs while this page is open or a runner calls run.',
-             'retries':0}
+             'retries':0,'chain_planner_version':2}
+        if 'chain' in config['families']:job['chain_discovery']=self.chain_pages(cat)['discovery']
         self.store.put_document('jobs/'+job['id'],job,0)
         return self.summary(job)
 
@@ -346,6 +393,9 @@ class Collector:
                             'to':min(end,horizon).isoformat(),'skip':'Outside documented five-year history horizon','horizon_gap':True}
                 start=max(start,horizon)
         expiry=contract_expiry(item)
+        if family=='intraday' and expiry and expiry<datetime.now(IST).date().isoformat():
+            return {'family':family,'item':item,'variant':variant,'from':start.isoformat(),'to':end.isoformat(),
+                    'skip':skip or 'Active intraday endpoint does not establish expired-contract history; use documented rolling options separately'}
         if family in ('daily','intraday') and expiry:
             end=min(end,date.fromisoformat(expiry)+timedelta(days=1))
         window_days=30 if family=='rolling' else 90 if family=='intraday' else max(1,(end-start).days)
@@ -357,14 +407,30 @@ class Collector:
                 cursor.pop('horizon_ack',None)
                 return None
         if family=='chain':
-            if item['instrument'] not in ('INDEX','EQUITY'):skip=skip or 'Chain requested via underlying entries only'
+            if not item.get('chain_underlying') and item['instrument'] not in ('INDEX','EQUITY'):skip=skip or 'Chain requested via underlying entries only'
             if item['symbol'] in ('INDIA VIX','INDIAVIX'):skip=skip or 'No options for this underlying'
         if family in ('depth20','depth200') and item['segment'] not in ('NSE_EQ','NSE_FNO'):
             skip=skip or 'Full depth documented for NSE equity and derivatives only'
         if family in ('quotes','live','depth20','depth200','chain') and expiry and expiry<datetime.now(IST).date().isoformat():
             skip=skip or 'Expired contract is not a current feed instrument'
+        if family=='intraday' and expiry and expiry<datetime.now(IST).date().isoformat():
+            skip=skip or 'Active intraday endpoint does not establish expired-contract history; use documented rolling options separately'
         task={'family':family,'item':item,'variant':variant,'from':start.isoformat(),
                 'to':end.isoformat(),'skip':skip}
+        if skip and family in ('quotes','live','depth20','depth200'):
+            entries=self.page_items(job['pages'][cursor['page']]['key']);batch=[]
+            for candidate in entries[cursor['item']:]:
+                candidate_expiry=contract_expiry(candidate)
+                candidate_reason=candidate.get('reason')
+                if not candidate_reason and family in ('depth20','depth200') and candidate['segment'] not in ('NSE_EQ','NSE_FNO'):
+                    candidate_reason='Full depth documented for NSE equity and derivatives only'
+                if not candidate_reason and candidate_expiry and candidate_expiry<datetime.now(IST).date().isoformat():
+                    candidate_reason='Expired contract is not a current feed instrument'
+                if candidate_reason!=skip or candidate['segment']!=item['segment']:break
+                if ((config:=job['config'])['segments'] and candidate['segment'] not in config['segments']) or (config['symbols'] and candidate['symbol'] not in config['symbols'] and candidate['underlying'] not in config['symbols']):break
+                batch.append(candidate)
+                if len(batch)>=1000:break
+            if batch:task.update(batch=batch,span=len(batch))
         if not skip and family in ('quotes','live','depth20'):
             maximum={'quotes':1000,'live':100,'depth20':50}[family]
             entries=self.page_items(job['pages'][cursor['page']]['key'])
@@ -435,8 +501,21 @@ class Collector:
             return {'endpoint':'optionchain/expirylist','request':args,'raw':{'data':expiries},'received_at':now()}
         if family=='quotes':
             body={segment:[int(i['security_id']) for i in task.get('batch',[item])]}
-            return {'endpoint':'marketfeed/quote','request':body,
+            response={'endpoint':'marketfeed/quote','request':body,
                     'raw':await self.call(owner,'marketfeed/quote',body),'received_at':now()}
+            expected=task.get('batch',[item]);values=quote_values(response,segment)
+            if len(expected)>1 and not any(isinstance(values.get(i['security_id']),dict) and values[i['security_id']] for i in expected):
+                response['isolated_probes']=[]
+                for candidate in quote_probe_items(expected):
+                    probe_body={segment:[int(candidate['security_id'])]}
+                    probe={'request':probe_body}
+                    try:probe['raw']=await self.call(owner,'marketfeed/quote',probe_body)
+                    except ProviderError as exc:
+                        if exc.code in AUTH_CODES|ACCESS_CODES|{'805','DH-904','BUDGET'} or exc.status in (401,403,429):raise
+                        probe.update(error=str(exc),code=exc.code,http_status=exc.status)
+                    probe['received_at']=now();response['isolated_probes'].append(probe)
+                response['diagnosis']='Empty bulk response; bounded isolated probes retained. Cause is not inferred from market closure.'
+            return response
         return await self.capture(task)
 
     async def capture(self,task):
@@ -547,7 +626,11 @@ class Collector:
             replace(self.store,'candles/'+series+'/'+day,change)
         with ThreadPoolExecutor(max_workers=8) as pool:list(pool.map(merge,by_day.items()))
         return {'rows':len(observed),'duplicate_timestamps':duplicates,'outside_requested_dates':outside_range,'quality':'ROWS_PRESENT' if observed else 'EMPTY',
-                'session_validation':'Pending correct exchange calendar','days':len(by_day),'days_saved':sorted(by_day),'series':series}
+                'session_validation':'Pending correct exchange calendar','days':len(by_day),'days_saved':sorted(by_day),'series':series,
+                'coverage':'ROWS_PRESENT_UNVERIFIED' if observed else 'EMPTY_RETURNED',
+                'requested_from':task['from'],'requested_to_exclusive':task['to'],
+                'first_returned_at':datetime.fromtimestamp(min(int(k.split(':')[0]) for k in observed),timezone.utc).isoformat() if observed else None,
+                'last_returned_at':datetime.fromtimestamp(max(int(k.split(':')[0]) for k in observed),timezone.utc).isoformat() if observed else None}
 
     def persist_result(self,task,response):
         family=task['family']
@@ -564,11 +647,14 @@ class Collector:
             if not isinstance(oc,dict):raise ProviderError('Chain strike map missing')
             return {'rows':len(oc),'quality':'ROWS_PRESENT' if oc else 'EMPTY','freshness':'Server receipt only'}
         if family=='quotes':
-            quotes=(response['raw'].get('data') or {}).get(task['item']['segment'],{})
+            quotes=quote_values(response,task['item']['segment'])
             expected=[i['security_id'] for i in task.get('batch',[task['item']])]
             valid=[sid for sid in expected if isinstance(quotes,dict) and isinstance(quotes.get(sid),dict) and quotes[sid]]
-            return {'rows':len(valid),'quality':'ROWS_PRESENT' if valid else 'EMPTY','expected':len(expected),
+            return {'rows':len(valid),'quality':'PARTIAL' if valid and len(valid)<len(expected) else 'ROWS_PRESENT' if valid else 'EMPTY','expected':len(expected),
                     'missing_security_ids':[sid for sid in expected if sid not in valid],
+                    'coverage':'PARTIAL' if len(valid)<len(expected) else 'SNAPSHOT_RETURNED_NOT_CONTINUOUS',
+                    'isolated_probes':len(response.get('isolated_probes',[])),
+                    'review_required':len(valid)<len(expected),'reason':response.get('diagnosis') if not valid else None,
                     'freshness':'Inspect provider last_trade_time; receipt is not a live quote timestamp'}
         expected={i['security_id'] for i in task.get('batch',[task['item']])}
         observed={o['security_id'] for f in response['raw']['frames'] for o in f.get('observations',[]) if o['security_id'] in expected}
@@ -583,6 +669,7 @@ class Collector:
             job=await asyncio.to_thread(self.get_job,jid)
             if job['state']!='running':return self.summary(job)
             if job.get('retry_at',0)>time.time():return self.summary(job)
+            await asyncio.to_thread(self.upgrade_chain_job,job)
             task=job.get('current')
             for _ in range(200):
                 if task:break
@@ -606,7 +693,8 @@ class Collector:
             if job.get('force_fetch'):raw_key='responses/'+digest([key,jid])
             try:
                 if task.get('skip'):
-                    result={'status':'unsupported','reason':task['skip'],'rows':0}
+                    result={'status':'unsupported','reason':task['skip'],'rows':0,'coverage':'NOT_COLLECTED',
+                            'instruments_assessed':len(task.get('batch',[task['item']]))}
                 else:
                     response,_=await asyncio.to_thread(self.store.document,raw_key)
                     if response is None:
@@ -618,11 +706,11 @@ class Collector:
                         else:response=await self.acquire_data(owner,task)
                         await asyncio.to_thread(install_once,self.store,raw_key,response)
                     result=await asyncio.to_thread(self.persist_result,task,response)
-                    result['status']='completed' if result['rows'] else 'empty'
+                    result['status']='partial' if result['rows'] and result.get('missing_security_ids') else 'completed' if result['rows'] else 'empty'
                     result['raw_key']=raw_key
                 entry={'task':task,'result':result,'checked_at':now()}
                 await asyncio.to_thread(install_once,self.store,'results/'+jid+'/'+key,entry)
-                job['counts'][result['status']]+=1;job['rows_saved']+=result['rows'];job['items_assessed']+=1
+                job['counts'][result['status']]=job['counts'].get(result['status'],0)+1;job['rows_saved']+=result['rows'];job['items_assessed']+=1
                 job['retries']=0;job.pop('retry_at',None);job.pop('request_error',None)
                 if task['family']=='chain' and result.get('expiries'):
                     job['chain_pending']=[e for e in result['expiries'] if e>=datetime.now(IST).date().isoformat()]
@@ -644,7 +732,7 @@ class Collector:
                     job['state']='paused';job['provider_calls']=max(0,job['provider_calls']-1)
                 elif code in ACCESS_CODES or exc.status==403:
                     job['state']='permission_blocked'
-                elif exc.status==429 or code=='DH-904':
+                elif exc.status==429 or code in ('DH-904','805'):
                     job['retries']+=1;job['retry_at']=time.time()+min(300,5*2**min(job['retries'],6))
                     job['message']='Rate limited; backing off at the same checkpoint. No data was marked complete.'
                 elif code in ('DH-905','DH-907') or exc.status in (400,422):
@@ -698,14 +786,18 @@ class Collector:
         self.get_job(jid)
         if not key.startswith('results/'+jid+'/'):raise HTTPException(422,'Invalid result key')
         entry=self.store.document(key)[0]
-        if not entry or entry['result']['status'] not in ('failed','empty','permission_blocked'):
-            raise HTTPException(422,'Choose a failed or empty result')
+        if not entry or entry['result']['status'] not in ('failed','partial','empty','permission_blocked'):
+            raise HTTPException(422,'Choose a failed, partial or empty result')
         parent=self.get_job(jid)
         child={**parent,'id':uuid.uuid4().hex,'pages':[],'cursor':{'page':0,'item':0,'variant':0,'window':0},
             'created_at':now(),'updated_at':now(),'state':'paused','current':entry['task'],
             'counts':{s:0 for s in TERMINAL},'items_assessed':0,'rows_saved':0,'retries':0,
             'provider_calls':0,'message':'Retry ready. Resume to retry this result.','retry_of':key,'force_fetch':True}
         child.pop('retry_at',None)
+        if entry['task']['family']=='quotes' and entry['result'].get('missing_security_ids'):
+            missing=set(entry['result']['missing_security_ids'])
+            task={**entry['task']};batch=[i for i in task.get('batch',[task['item']]) if i['security_id'] in missing]
+            task.update(item=batch[0],batch=batch,span=len(batch));child['current']=task
         if entry['task']['family']=='chain_snapshot':
             child['chain_parent']=entry['task'];child['chain_pending']=[entry['task']['expiry']]
         self.store.put_document('jobs/'+child['id'],child,0)

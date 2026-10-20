@@ -199,9 +199,11 @@ def create_app(db_path=None):
         return await collector.run(jid)
 
     @app.post('/api/collection/jobs/{jid}/diagnose')
-    async def collection_diagnose(jid:str,request:Request):
+    async def collection_diagnose(jid:str,request:Request,payload:dict|None=None):
         require_admin(request)
-        return await diagnose(collector,jid)
+        key=(payload or {}).get('result_key')
+        if key is not None and not isinstance(key,str):raise HTTPException(422,'Choose a result key')
+        return await diagnose(collector,jid,key)
 
     @app.post('/api/collection/jobs/{jid}/{action}')
     def collection_control(jid:str,action:str,request:Request):

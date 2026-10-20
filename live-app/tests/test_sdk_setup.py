@@ -37,7 +37,10 @@ def test_real_sdk_builds_data_requests_and_preserves_raw_envelope(monkeypatch,pa
     assert asyncio.run(Dhan(Credentials()).post(path,body))==raw
     url,sent,opts=calls[0]
     assert url=='https://api.dhan.co/v2/'+path
-    assert sent['dhanClientId']=='fixture-client' # Official SDK supplies this.
+    if path.startswith('marketfeed/'):
+        assert 'dhanClientId' not in sent and sent==body
+        assert opts['headers']['client-id']=='fixture-client'
+    else:assert sent['dhanClientId']=='fixture-client'
     assert opts['headers']['access-token']=='fixture-token'
     assert opts['allow_redirects'] is False and opts['timeout'][0]==10
     assert json.dumps(body,sort_keys=True)==before # No credential injected into saved provenance.

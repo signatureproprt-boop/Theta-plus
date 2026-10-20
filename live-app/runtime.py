@@ -1,4 +1,4 @@
 """Runtime identity and timezone; no trading rules."""
 from zoneinfo import ZoneInfo
 IST=ZoneInfo('Asia/Kolkata')
-VERSION='theta-foundation-3.7.0'
+VERSION='theta-foundation-3.7.1'

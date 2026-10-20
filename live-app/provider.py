@@ -1,6 +1,7 @@
 """Official DhanHQ-py data adapter. No broker execution methods are exposed."""
 import asyncio
 import copy
+import json
 import re
 import time
 from importlib.metadata import version
@@ -30,6 +31,18 @@ class DataSession(requests.Session):
     def request(self, method, url, **kwargs):
         if method.upper()!='POST' or url not in {'https://api.dhan.co/v2/'+p for p in DATA_PATHS}:
             self.failure='ENDPOINT';raise RuntimeError('Only approved Dhan data endpoints are enabled')
+        # SDK 2.3 injects dhanClientId into every body. Quote endpoints accept
+        # a segment -> ID-list map; client identity belongs in the headers.
+        # Keep using the official SDK, correcting only this wire contract.
+        if url.rsplit('/',1)[-1] in ('quote','ohlc','ltp') and '/marketfeed/' in url:
+            payload=json.loads(kwargs.get('data') or '{}')
+            if isinstance(payload,dict):payload.pop('dhanClientId',None)
+            if (not isinstance(payload,dict) or not payload or
+                any(k not in {'IDX_I','NSE_EQ','BSE_EQ','NSE_FNO','BSE_FNO','NSE_CURRENCY','BSE_CURRENCY','MCX_COMM'} or
+                    not isinstance(v,list) or not v or any(isinstance(i,bool) or not isinstance(i,int) or i<0 for i in v)
+                    for k,v in payload.items()) or sum(map(len,payload.values()))>1000):
+                self.failure='PAYLOAD';raise RuntimeError('Invalid market quote segment/ID payload')
+            kwargs['data']=json.dumps(payload)
         kwargs.update(timeout=(10,self.read_timeout),allow_redirects=False)
         try:
             response=super().request(method,url,**kwargs)

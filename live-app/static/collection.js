@@ -61,7 +61,9 @@
     $('#collection-current').innerHTML=`<h3>${esc(job.state.replaceAll('_',' '))}</h3>
     <p>Job ${esc(job.id)} · ${esc(job.items_assessed)} work items assessed · ${esc(job.rows_saved)} rows / frames returned across batches</p>
     <div class="collection-options">${Object.entries(counts).map(([k,v])=>`<span>${esc(k)}: <b>${esc(v)}</b></span>`).join('')}</div>
-    <p>${esc(job.message)}</p><p>Current item: ${esc(job.current_item ? job.current_item.family+' / '+job.current_item.symbol+' / '+job.current_item.segment+' / '+job.current_item.from+' → '+job.current_item.to : '—')}</p><p>Updated: ${esc(job.updated_at)}</p>`;
+    <p>${esc(job.message)}</p><p>Scope: ${esc((job.config?.families||[]).join(', ')||'Not reported')} · Symbols: ${esc(job.config?.symbols?.join(', ')||'All')} · Segments: ${esc(job.config?.segments?.join(', ')||'All mapped')} · ${esc(job.config?.start||'—')} → ${esc(job.config?.end||'—')} (exclusive)</p>
+    ${job.chain_discovery?`<p>Chain discovery: ${esc(job.chain_discovery.underlyings)} option-bearing underlyings · unresolved option rows: ${esc(JSON.stringify(job.chain_discovery.unresolved_option_rows))}. Discovery is not verified coverage.</p>`:''}
+    <p>Current item: ${esc(job.current_item ? job.current_item.family+' / '+job.current_item.symbol+' / '+job.current_item.segment+' / '+job.current_item.from+' → '+job.current_item.to : '—')}</p><p>Updated: ${esc(job.updated_at)}</p>`;
   }
   async function refresh(append=false) {
     const [cat,list,engine]=await Promise.all([get('catalogue'),get('jobs'+(append && jobCursor?'?after='+encodeURIComponent(jobCursor):'')),get('engine')]);
@@ -94,10 +96,10 @@
     if (!active) throw Error('Select a collection job first.');
     const data=await get('jobs/'+active+'/results'+(append && resultCursor?'?after='+encodeURIComponent(resultCursor):''));
     const rows=data.items.map(e=>`<tr><td>${esc(e.task.item.symbol)}<br>${esc(e.task.item.segment || e.task.item.exchange+'_'+e.task.item.raw_segment)}</td>
-    <td>${esc(e.task.family)}<br>${esc(['daily','intraday','rolling'].includes(e.task.family) ? e.task.from+' → '+e.task.to : 'Current sample / snapshot')}</td><td>${esc(e.result.status)}<br>${esc(e.result.reason || (e.result.missing_security_ids?.length ? e.result.missing_security_ids.length+' missing instruments' : e.result.quality) || '')}</td>
+    <td>${esc(e.task.family)}<br>${esc(['daily','intraday','rolling'].includes(e.task.family) ? e.task.from+' → '+e.task.to : 'Current sample / snapshot')}</td><td>${esc(e.result.status)}<br>${esc(e.result.reason || e.result.quality || '')}${e.result.missing_security_ids?.length?'<br>'+esc(e.result.missing_security_ids.length)+' missing instruments':''}${e.result.instruments_assessed?'<br>'+esc(e.result.instruments_assessed)+' identities assessed':''}${e.result.isolated_probes?'<br>'+esc(e.result.isolated_probes)+' isolated probes':''}<br>${esc(e.result.coverage||'Coverage not verified')}</td>
     <td>${esc(e.result.rows)}${e.result.duplicate_timestamps ? ' · duplicates: '+esc(e.result.duplicate_timestamps):''}</td><td>
     ${e.result.raw_key?`<button class="button secondary" data-collection-export="${esc(e.result.raw_key)}">Raw JSON</button>`:''}
-    ${['failed','empty','permission_blocked'].includes(e.result.status)?`<button class="button secondary" data-collection-retry="${esc(e.key)}">Retry</button>`:''}</td></tr>`).join('');
+    ${['failed','partial','empty','permission_blocked'].includes(e.result.status)?`<button class="button secondary" data-collection-retry="${esc(e.key)}">Retry missing / failed</button><button class="button secondary" data-collection-diagnose="${esc(e.key)}">Diagnose</button>`:''}</td></tr>`).join('');
     if (append) $('#collection-result-body').insertAdjacentHTML('beforeend',rows);
     else $('#collection-result-list').innerHTML=`<div class="table-wrap"><table><thead><tr><th>Instrument</th><th>Data / dates</th><th>Outcome</th><th>Rows</th><th>Actions</th></tr></thead><tbody id="collection-result-body">${rows || '<tr><td colspan="5">No outcomes yet.</td></tr>'}</tbody></table></div>`;
     resultCursor=data.next_cursor || '';
@@ -121,6 +123,7 @@
       if (b.id==='collection-results-more') await results(true);
       if (b.dataset.collectionExport) download('dhan-raw.json',await get('export/'+b.dataset.collectionExport));
       if (b.dataset.collectionRetry) {running=false;showJob(await write('retry',{job_id:active,key:b.dataset.collectionRetry}));await refresh();feedback('Retry job created. Resume when ready.');}
+      if (b.dataset.collectionDiagnose) {const id=active;feedback('Checking exact master identity and a bounded provider request. The saved checkpoint is retained.');const report=await write('jobs/'+id+'/diagnose',{result_key:b.dataset.collectionDiagnose});feedback('Diagnosis: '+report.conclusion+' · '+report.probes.map(p=>p.endpoint+': '+p.state+(p.rows!==undefined?' ('+p.rows+' rows)':'')).join(' · '));}
     } catch(ex) {feedback(ex.message);}
     finally {b.disabled=false;syncPolicyButtons();}
   });
