@@ -22,10 +22,10 @@ def instrument(**kw):
 def seed(store,entries=None,group='IDX_I-INDEX'):
     entries=entries or [instrument()]
     page='catalogue/'+'a'*64+'/pages/00000'
-    store.put_document(page,{'items':entries},0)
+    store.put_document(page,{'items':entries},store.document(page)[1])
     cat={'sha256':'a'*64,'rows':len(entries),'fetched_at':'now','segments':{},'review_reasons':{},
          'pages':[{'key':page,'group':group,'count':len(entries)}]}
-    store.put_document('catalogue/current',cat,0)
+    store.put_document('catalogue/current',cat,store.document('catalogue/current')[1])
     return cat
 
 class Provider:
@@ -183,6 +183,7 @@ def test_horizon_gap_recorded_before_supported_range(setup):
 
 def test_chain_all_expiries_checkpointed_and_raw_exportable(setup):
     c,p,s=setup
+    seed(s,[instrument(),instrument(security_id='999',instrument='OPTIDX',segment='NSE_FNO',raw_segment='D',underlying='NIFTY',underlying_id='26000',expiry='2099-01-01')])
     job=c.create(CollectionPlan(start='2026-10-16',end='2026-10-17',families=['chain']))
     jid=job['id'];c.control(jid,'resume')
     p.answer={'data':['2099-10-01','2099-11-01']}
@@ -291,6 +292,7 @@ def test_unknown_mapping_does_not_call_provider(setup):
 
 def test_failed_chain_retry_reuses_its_expiry_not_entire_parent(setup):
     c,p,s=setup
+    seed(s,[instrument(),instrument(security_id='999',instrument='OPTIDX',segment='NSE_FNO',raw_segment='D',underlying='NIFTY',underlying_id='26000',expiry='2099-01-01')])
     job=c.create(CollectionPlan(start='2026-10-16',end='2026-10-17',families=['chain']))
     jid=job['id'];c.control(jid,'resume');p.answer={'data':['2099-01-01']}
     run(c,jid);p.problem=ProviderError('Temporarily unavailable')

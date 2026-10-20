@@ -215,3 +215,22 @@ test('request-review continuation uses explicit protected action and does not cl
  assert.match(e.element('collection-feedback').textContent,/NOT_COLLECTED/);
  assert.equal(e.element('collection-skip').disabled,true);
 });
+
+test('partial results expose missing identities and protected diagnosis without resuming collection',async()=>{
+ const jid='a'.repeat(32),key='results/'+jid+'/fixture';
+ const response=data=>({ok:true,status:200,text:async()=>JSON.stringify(data)});
+ const e=environment('completed',{responses:{
+  ['/api/collection/jobs/'+jid+'/results']:response({items:[{key,task:{family:'quote',item:{symbol:'NIFTY',segment:'IDX_I'}},result:{status:'partial',rows:1,missing_security_ids:['25','51'],coverage:'PARTIAL',isolated_probes:3}}],next_cursor:null}),
+  ['/api/collection/jobs/'+jid+'/diagnose']:response({conclusion:'EMPTY_UNRESOLVED',probes:[{endpoint:'marketfeed/quote',state:'empty',rows:0}]})
+ }});
+ await e.flush();e.element('token-admin-password').value='fixture-admin';await e.click('admin-signin');
+ const b=e.element('job-button');b.dataset.collectionJob=jid;await e.click('job-button');await e.click('collection-results');
+ const html=e.element('collection-result-list').innerHTML;
+ assert.match(html,/2 missing instruments/);assert.match(html,/3 isolated probes/);assert.match(html,/data-collection-diagnose/);
+ const d=e.element('diagnose-fixture');d.dataset.collectionDiagnose=key;await e.click('diagnose-fixture');
+ const call=e.calls.find(([url])=>url.endsWith('/diagnose'));
+ assert.equal(call[1].headers['X-Theta-Admin-Password'],'fixture-admin');
+ assert.deepEqual(JSON.parse(call[1].body),{result_key:key});
+ assert.match(e.element('collection-feedback').textContent,/EMPTY_UNRESOLVED/);
+ assert.equal(e.calls.filter(([url])=>url.endsWith('/run')||url.endsWith('/resume')).length,0);
+});
