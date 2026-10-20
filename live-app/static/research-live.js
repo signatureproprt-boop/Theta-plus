@@ -5,7 +5,7 @@
   const fmt=v=>v==null?'—':Number(v).toLocaleString('en-IN',{maximumFractionDigits:2});
   let active=false,controller=null,generation=0,symbol='nifty',state='Disconnected',rows=new Map(),points=[],lastFrame=0,retries=0,connected=false,stalled=false,retryDelay=2500,busySince=0;
   function text(message){state=message;if(node('research-live-state'))node('research-live-state').textContent=message;}
-  function currentTrade(r){const at=Date.parse(r.trade_at);const age=Date.now()-at;return Number.isFinite(at)&&age>=0&&age<=10000&&r.trade_state==='RECENT_TRADE';}
+  function currentTrade(r){const at=Date.parse(r.trade_at);const age=Date.now()-at;const receiptAge=Date.now()-Date.parse(r.received_at);return active&&connected&&Number.isFinite(at)&&age>=0&&age<=10000&&receiptAge>=0&&receiptAge<=10000&&r.trade_state==='RECENT_TRADE';}
   function render(){
     window.thetaResearchLiveState?.();if(!node('research-live-prices'))return;
     node('research-live-state').textContent=state;
@@ -59,15 +59,16 @@
       const reader=response.body.getReader(),decoder=new TextDecoder();let pending='';
       while(active&&generation===id){const {done,value}=await reader.read();if(done)break;pending+=decoder.decode(value,{stream:true});if(pending.length>2000000)throw Error('Invalid stream size');let end;while((end=pending.indexOf('\n\n'))>=0){const block=pending.slice(0,end);pending=pending.slice(end+2);if(block.startsWith('data: ')&&active&&generation===id)receive(JSON.parse(block.slice(6)));}}
       await reader.cancel().catch(()=>{});
-      if(active&&generation===id){if(!busySince)text('Renewing live connection…');await new Promise(resolve=>setTimeout(resolve,retryDelay));}
-    }catch(error){if(generation!==id||!active)break;if(error.name==='AbortError'&&!stalled)break;stalled=false;retries++;
+      connected=false;render();if(active&&generation===id){if(!busySince)text('Renewing live connection…');await new Promise(resolve=>setTimeout(resolve,retryDelay));}
+    }catch(error){if(generation!==id||!active)break;if(error.name==='AbortError'&&!stalled)break;stalled=false;connected=false;retries++;
       // Authentication/configuration failures need a deliberate user action.
-      if(error.status===429||/Admin|password|credentials|token|rejected/i.test(error.message)||retries>=5){active=false;text(error.message);render();break;}
+      if([401,403,422,429].includes(error.status)||/Admin|password|credentials|token|rejected/i.test(error.message)||retries>=5){active=false;text(error.message);render();break;}
       text('Disconnected · reconnect attempt '+retries+'/5');render();await new Promise(resolve=>setTimeout(resolve,Math.min(30000,1000*2**retries)));
     }}
   }
   window.thetaLiveIsActive=()=>active;
-  window.thetaLiveStop=()=>{active=false;generation++;controller?.abort();text('Disconnected · last observations retained, not live');render();};
+  window.thetaLiveIsConnected=()=>active&&connected;
+  window.thetaLiveStop=()=>{active=false;connected=false;generation++;controller?.abort();text('Disconnected · last observations retained, not live');render();};
   window.thetaLiveMount=()=>{
     if(!node('research-live-start'))return;
     node('research-live-start').onclick=()=>{if(active)return;if(typeof window.thetaLiveStreamRequest!=='function'){text('Open Admin and Unlock Admin first.');render();return;}symbol=node('research-symbol')?.value||'nifty';rows=new Map();points=[];window.thetaResearchLiveReset?.();retries=0;busySince=0;retryDelay=2500;active=true;window.thetaSessionRefresh?.();lastFrame=Date.now();text('Connecting…');render();connect(++generation);};

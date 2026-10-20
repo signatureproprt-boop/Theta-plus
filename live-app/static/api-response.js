@@ -21,7 +21,7 @@
     try{value=JSON.parse(body);}catch{
       // Proxy errors may be plain text/HTML. Never show their raw body or turn
       // a failed status read into evidence that credentials are missing.
-      throw Error(`Server response unavailable (HTTP ${response.status}). Retry later; saved connection has not been changed.`);
+      const error=Error(`Server response unavailable (HTTP ${response.status}). Retry later; saved connection has not been changed.`);error.status=response.status;throw error;
     }
     if(!response.ok){const error=Error(typeof value?.detail==='string'?value.detail:`Request failed (HTTP ${response.status}).`);error.status=response.status;throw error;}
     if(!value||typeof value!=='object'||Array.isArray(value))throw Error('Server returned an invalid data response. Retry later.');

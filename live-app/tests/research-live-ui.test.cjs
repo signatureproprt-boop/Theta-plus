@@ -71,3 +71,8 @@ test('option batches reach the selected-option bridge and new connection clears 
   assert.equal(reset,1);assert.equal(received[0].security_id,'123');
   e.context.window.thetaLiveStop();
 });
+test('plain-text authorization rejection stops without reconnecting',async()=>{
+  const e=environment([]);e.context.window.thetaLiveStreamRequest=async()=>({ok:false,status:403,text:async()=> 'access denied'});
+  e.node('research-live-start').onclick();await e.flush();
+  assert.equal(e.context.window.thetaLiveIsActive(),false);assert.equal(e.timeouts.length,0);
+});

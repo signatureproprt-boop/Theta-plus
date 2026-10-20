@@ -31,3 +31,9 @@ test('contract labels cannot inject markup and momentum is context only',()=>{
   assert.ok(!html.includes('<script>unsafe</script>'));assert.match(html,/&lt;script&gt;/);
   assert.match(html,/RSI\(14\) 55/);assert.match(html,/not an accuracy score/);
 });
+test('trend-pullback plan stays selected in Paper Journal instead of defaulting to ORB',async()=>{
+ const e=environment('paper');await e.flush();
+ e.context.window.thetaPaperPlanReady({setup:'trend_pullback',symbol:'nifty',plan:{state:'SIZED',lots:1,quantity:65},risk:{entry:100},contract:{identity_verified:true,strike:23000,side:'CE',expiry:'2026-10-27'}});
+ e.context.window.thetaWorkflowMount();
+ assert.match(e.nodes.get('paper-trade-panel').innerHTML,/value="trend_pullback" selected/);
+});
