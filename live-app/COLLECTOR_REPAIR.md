@@ -1,4 +1,4 @@
-# Collector repair — 3.7.1
+# Collector repair — 3.7.2
 
 This release corrects the official SDK's marketfeed wire payload, derives chain
 underlyings from actual option contracts, and keeps partial/missing results visible.
@@ -38,3 +38,12 @@ NSE_M has no verified API segment mapping and remains explicitly unresolved.
 An instrument master entry is discovery, not proof of historical or live coverage.
 The compact Dhan-style design preview is a separate change and is not deployed
 by this collector repair.
+
+## Workspace rollout repair
+
+A production traceback identified a null job record being passed to
+`Collector.summary`. Job listing now reports missing/null records in `read_issues`
+without deleting them, preserves its name-based pagination cursor, and returns
+valid jobs normally. Both Trading Room API paths have a regression test with an
+actual retained null job document. Storage/network exceptions still propagate;
+this change does not suppress unrelated workspace errors.

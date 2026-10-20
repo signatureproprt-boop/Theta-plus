@@ -488,3 +488,40 @@ def test_disconnect_during_provider_call_releases_lease_and_keeps_checkpoint(set
         job=c.get_job(jid)
         assert job['current']['item']['security_id']=='13' and job['items_assessed']==0 and job['rows_saved']==0
     anyio.run(task)
+
+
+def test_missing_job_records_preserve_pagination_and_never_modify_store(setup,monkeypatch):
+    c,p,s=setup
+    ids=[plan(c) for _ in range(2)]
+    existing={k:s.document('jobs/'+k) for k in ids}
+    names=['jobs/'+f'{n:032x}' for n in range(21)]
+    names[1]='jobs/'+ids[0];names[19]='jobs/'+ids[1]
+    monkeypatch.setattr(s,'document_names',lambda prefix,after='',limit=100:names if not after else [names[-1]])
+    original=s.document
+    monkeypatch.setattr(s,'document',lambda name: original(name) if name in ('jobs/'+k for k in ids) else (None,0))
+    result=c.jobs()
+    assert [j['id'] for j in result['jobs']]==ids
+    assert len(result['read_issues'])==18
+    assert result['next_cursor']==names[19]
+    following=c.jobs(result['next_cursor'])
+    assert not following['jobs'] and len(following['read_issues'])==1 and following['next_cursor'] is None
+    assert {k:s.document('jobs/'+k) for k in ids}==existing
+
+
+def test_null_job_does_not_crash_either_trading_workspace(tmp_path,monkeypatch):
+    monkeypatch.delenv('THETA_GCS_BUCKET',raising=False)
+    monkeypatch.delenv('DHAN_ACCESS_TOKEN',raising=False)
+    app=server.create_app(tmp_path/'missing-job.db')
+    store=app.state.store;collector=app.state.collector
+    seed(store);valid=collector.create(CollectionPlan(start='2026-10-16',end='2026-10-17',families=['daily']))
+    assert store.put_document('jobs/'+'0'*32,None,0)
+    with TestClient(app) as client:
+        for symbol in ('nifty','banknifty'):
+            response=client.get('/api/research/workspace',params={'symbol':symbol})
+            assert response.status_code==200,response.text
+            data=response.json()
+            assert data['symbol']==symbol and data['mode']=='READ_ONLY_RESEARCH'
+            assert data['collection']['jobs'][0]['id']==valid['id']
+            assert data['collection']['read_issues']==[{'document':'jobs/'+'0'*32,'state':'JOB_RECORD_UNAVAILABLE'}]
+            assert all(setup['state']=='DATA_UNAVAILABLE' for setup in data['setups'])
+        assert store.document('jobs/'+'0'*32)[0] is None

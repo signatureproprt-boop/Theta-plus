@@ -234,3 +234,12 @@ test('partial results expose missing identities and protected diagnosis without 
  assert.match(e.element('collection-feedback').textContent,/EMPTY_UNRESOLVED/);
  assert.equal(e.calls.filter(([url])=>url.endsWith('/run')||url.endsWith('/resume')).length,0);
 });
+
+test('unavailable job records display a warning instead of claiming there are no jobs',async()=>{
+ const e=environment('completed',{responses:{'/api/collection/jobs':{ok:true,status:200,text:async()=>JSON.stringify({jobs:[],read_issues:[{document:'jobs/missing',state:'JOB_RECORD_UNAVAILABLE'}],next_cursor:'jobs/missing'})}}});
+ await e.flush();
+ const html=e.element('collection-jobs').innerHTML;
+ assert.match(html,/1 job records unavailable/);assert.match(html,/saved data was not changed/);
+ assert.doesNotMatch(html,/No collection jobs yet/);
+ assert.equal(e.element('collection-more').hidden,false);
+});

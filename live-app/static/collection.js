@@ -72,7 +72,9 @@
     $('#collection-runner-help').textContent=background?'Resume starts collection on the server. You may close this page; reopen and refresh to see progress. Token and request errors stop at the saved checkpoint.':'Keep this page open to run batches. Closing it stops further requests; checkpoints remain saved.';
     $('#catalogue-status').textContent=cat.rows ? `${cat.rows.toLocaleString()} catalogue entries · ${cat.fetched_at} · Review reasons: ${JSON.stringify(cat.review_reasons)}` : 'Refresh the instrument catalogue before creating a plan.';
     const links=list.jobs.map(j=>`<button type="button" class="button secondary" data-collection-job="${esc(j.id)}">${esc(j.created_at.slice(0,16))} · ${esc(j.state)} · ${esc(j.items_assessed)} items</button>`).join('');
-    if (append) $('#collection-jobs').insertAdjacentHTML('beforeend',links); else $('#collection-jobs').innerHTML=links || 'No collection jobs yet.';
+    const issues=list.read_issues || [];
+    const warning=issues.length?`<p role="status">${esc(issues.length)} job records unavailable on this page; saved data was not changed. Review: ${esc(issues.map(i=>i.document).join(', '))}</p>`:'';
+    if (append) $('#collection-jobs').insertAdjacentHTML('beforeend',links+warning); else $('#collection-jobs').innerHTML=(links || (issues.length?'':'No collection jobs yet.'))+warning;
     jobCursor=list.next_cursor || '';
     $('#collection-more').hidden=!jobCursor;
     if (active) showJob(await get('jobs/'+active));
