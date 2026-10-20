@@ -13,7 +13,7 @@ from runtime import IST
 from dhan_data import candle_count
 from provider import ProviderError
 
-RULE_VERSION='research-1.1'
+RULE_VERSION='research-1.2'
 POLICY={
     'candle':{'max_age_seconds':90,'timestamp':'exchange candle close','required':['exchange_at','received_at','open','high','low','close','volume']},
     'chain':{'max_age_seconds':10,'timestamp':'exchange quote, not server receipt','required':['expiry','strike','side','security_id','bid','ask','volume','oi']},
@@ -219,7 +219,7 @@ def price_room(candles,clock,side,invalidation):
     obstacle=min(levels,key=lambda r:r['distance'])
     return {**obstacle,'underlying_risk_points':risk,'room_r':obstacle['distance']/risk,'entry_reference':entry}
 
-def setup_rules(candles,clock,setup,config=None,contract=None,breadth=None,context_fresh=False,room_r=None,indicator_view=None):
+def setup_rules(candles,clock,setup,config=None,contract=None,breadth=None,context_fresh=False,room_r=None,indicator_view=None,pattern_asof_close=False):
     cfg=config or RuleConfig();reasons=[];missing=[];wait=[];reject=[]
     closed=[r for r in candles if stamp(r['timestamp'])+timedelta(minutes=1)<=clock]
     today=[r for r in closed if stamp(r['timestamp']).astimezone(IST).date()==clock.astimezone(IST).date()]
@@ -229,7 +229,7 @@ def setup_rules(candles,clock,setup,config=None,contract=None,breadth=None,conte
     elif ind['15']['bias']!=bias:
         (missing if ind['15']['bias']=='UNAVAILABLE' else reject).append('HTF_CONFLICT' if ind['15']['bias']!='UNAVAILABLE' else 'MTF_WARMUP_REQUIRED')
     else:reasons.append('HTF_ALIGNED');direction='CE' if bias=='BULLISH' else 'PE'
-    level=invalid=None
+    level=invalid=trigger=None
     if setup=='opening_range':
         opening=[r for r in today if '09:15'<=stamp(r['timestamp']).astimezone(IST).strftime('%H:%M')<'09:30']
         expected={int(clock.astimezone(IST).replace(hour=9,minute=15,second=0,microsecond=0).timestamp())+i*60 for i in range(15)}
@@ -246,7 +246,7 @@ def setup_rules(candles,clock,setup,config=None,contract=None,breadth=None,conte
                 if len(post)-i-1>cfg.max_retest_bars:reject.append('LATE_ENTRY')
                 elif not holds:wait.append('RETEST_PENDING')
                 else:
-                    retest=holds[-1];invalid=retest['low'] if up else retest['high']
+                    retest=holds[-1];invalid=retest['low'] if up else retest['high'];trigger=retest['high'] if up else retest['low']
                     if (last['close']>retest['high'] if up else last['close']<retest['low']):reasons.extend(['RETEST_HOLD_OK','FRESH_TRIGGER_OK'])
                     else:wait.append('FRESH_TRIGGER_PENDING')
     else:
@@ -258,15 +258,26 @@ def setup_rules(candles,clock,setup,config=None,contract=None,breadth=None,conte
             hold=bar['close']>=avg if up else bar['close']<=avg
             if not touch:wait.append('PULLBACK_PENDING')
             elif not hold:reject.append('STRUCTURE_BROKEN')
-            elif (five[-1]['close']>five[-2]['high'] if up else five[-1]['close']<five[-2]['low']):
-                reasons.extend(['PULLBACK_HOLD_OK','FRESH_TRIGGER_OK']);invalid=bar['low'] if up else bar['high']
-            else:wait.append('FRESH_TRIGGER_PENDING')
+            else:
+                trigger=five[-2]['high'] if up else five[-2]['low']
+                if (five[-1]['close']>trigger if up else five[-1]['close']<trigger):
+                    reasons.extend(['PULLBACK_HOLD_OK','FRESH_TRIGGER_OK']);invalid=bar['low'] if up else bar['high']
+                else:wait.append('FRESH_TRIGGER_PENDING')
     if not closed:missing.append('CANDLES_MISSING')
     else:
         f=freshness(closed[-1]['closed_at'],closed[-1]['received_at'],clock,90)
         if f['state']!='FRESH':missing.append('CANDLE_'+f['state'])
     local=clock.astimezone(IST)
     if not (local.weekday()<5 and '09:30'<=local.strftime('%H:%M')<'15:00'):reject.append('OUTSIDE_ENTRY_WINDOW')
+    pattern_missing=list(missing)
+    if pattern_asof_close and closed:
+        pattern_missing=[code for code in missing if not code.startswith('CANDLE_')]
+        if (clock-stamp(closed[-1]['timestamp'])-timedelta(minutes=1)).total_seconds()>90:pattern_missing.append('CANDLE_STALE')
+    pattern={'state':'DATA_UNAVAILABLE' if pattern_missing else 'NO_PATTERN' if reject else 'FORMING' if wait else 'TRIGGER_OBSERVED' if 'FRESH_TRIGGER_OK' in reasons else 'FORMING',
+             'side':direction,'reason_codes':list(dict.fromkeys(pattern_missing+reject+wait+reasons)),
+             'clock_basis':'BAR_CLOSE_REPLAY_ASSUMPTION' if pattern_asof_close else 'OBSERVED_SOURCE_TIMES',
+             'trigger_price':trigger,'reference_level':level,'underlying_invalidation':invalid,
+             'clock':clock.isoformat(),'basis':('Historical replay assumes each bar is known at its close; ingestion revisions not simulated. ' if pattern_asof_close else '')+'Closed underlying candles only; not option eligibility or a trade recommendation'}
     if not context_fresh:missing.append('EVENT_CONTEXT_UNAVAILABLE')
     fraction=(breadth.get('fraction_up') if direction=='CE' else breadth.get('fraction_down')) if isinstance(breadth,dict) else (breadth if direction=='CE' else 1-breadth) if breadth is not None else None
     if fraction is None:missing.append('BREADTH_UNAVAILABLE')
@@ -286,7 +297,7 @@ def setup_rules(candles,clock,setup,config=None,contract=None,breadth=None,conte
         if (contract.get('volume') or 0)<cfg.min_volume or (contract.get('oi') or 0)<cfg.min_oi:reject.append('LIQUIDITY_TOO_LOW')
         if contract.get('expiry')==local.date().isoformat() and not cfg.expiry_day_allowed:reject.append('EXPIRY_DAY_BLOCKED')
     state='DATA_UNAVAILABLE' if missing else 'NO_TRADE' if reject else 'WAIT' if wait else 'CONFIRM'
-    return {'state':state,'setup':setup,'rule_version':RULE_VERSION,'config':cfg.model_dump(),
+    return {'state':state,'price_pattern':pattern,'trigger_price':trigger,'setup':setup,'rule_version':RULE_VERSION,'config':cfg.model_dump(),
             'clock':clock.isoformat(),'side':direction,'reason_codes':list(dict.fromkeys(missing+reject+wait+reasons)),
             'room_r':room_r,'observed_obstacle':observed_room,'missing':missing,'failed':reject,'pending':wait,'passed':reasons,'reference_level':level,'underlying_invalidation':invalid,
             'indicators':ind,'execution':'NO_BROKER_EXECUTION','validation':'UNVALIDATED_RESEARCH_RULES'}
@@ -294,6 +305,7 @@ def setup_rules(candles,clock,setup,config=None,contract=None,breadth=None,conte
 class RiskInput(Model):
     entry: FiniteFloat = Field(gt=0)
     stop: FiniteFloat = Field(gt=0)
+    target: FiniteFloat | None = Field(default=None,gt=0,le=10000000)
     risk_rupees: FiniteFloat = Field(gt=0,le=1000000)
     capital: FiniteFloat = Field(gt=0,le=100000000)
     daily_loss_cap: FiniteFloat = Field(gt=0,le=1000000)
@@ -318,6 +330,7 @@ class RiskInput(Model):
     @model_validator(mode='after')
     def stop_below_entry(self):
         if self.stop>=self.entry:raise ValueError('Long-option stop must be below entry')
+        if self.target is not None and self.target<=self.entry:raise ValueError('Long-option target must be above entry')
         return self
 
 def risk_plan(p,clock=None):
@@ -336,11 +349,25 @@ def risk_plan(p,clock=None):
     lots=max(0,min(floor(max(0,budget-fixed)/per_lot),floor(max(0,p.capital-fixed)/(p.entry*p.lot_size+costs))))
     if not lots:reasons.append('RISK_BUDGET_INSUFFICIENT')
     if reasons:lots=0
-    return {'state':'NO_TRADE' if reasons else 'SIZED','lots':lots,'quantity':lots*p.lot_size,
+    quantity=lots*p.lot_size
+    loss=lots*per_lot+(fixed if lots else 0)
+    reward=(p.target-p.entry)*quantity-estimated_exit_costs(p,quantity,p.target) if p.target is not None and quantity else None
+    return {'target_premium':p.target,'planned_net_reward':round(reward,2) if reward is not None else None,
+            'net_reward_risk_ratio':round(reward/loss,4) if reward is not None and loss else None,
+            'state':'NO_TRADE' if reasons else 'SIZED','lots':lots,'quantity':lots*p.lot_size,
             'risk_budget_available':budget,'planned_stop_loss':round(lots*per_lot+(fixed if lots else 0),2),
             'estimated_costs':round(lots*costs+(fixed if lots else 0),2),
             'premium_paid':round(lots*p.lot_size*p.entry,2),'reason_codes':reasons,
             'assumptions':p.model_dump(mode='json'),'warning':'Planning estimate; stop fills may gap. Premium at risk can exceed stop budget. Charges are explicit user inputs, not a verified tariff feed.'}
+
+
+def estimated_exit_costs(p,quantity,exit_premium):
+    if not quantity:return 0.0
+    lots=quantity/p.lot_size;turnover=(p.entry+exit_premium)*quantity
+    transaction=lots*p.exchange_roundtrip_per_lot+turnover*p.sebi_turnover_rate
+    return ((transaction+p.brokerage_roundtrip)*(1+p.gst_rate)+exit_premium*quantity*p.stt_exit_rate+
+            p.entry*quantity*p.stamp_entry_rate+(p.slippage_per_unit+p.spread_per_unit)*quantity)
+
 
 class PaperNote(Model):
     id: str = Field(pattern=r'^[a-f0-9]{32}$')
@@ -398,14 +425,14 @@ def replay_report(store,p):
         at=stamp(bar['closed_at']);known=[r for r in visible if stamp(r['timestamp'])+timedelta(minutes=1)<=at]
         # Historical receive times are not replaced with the event clock.
         # No unavailable chain/context observations are reconstructed.
-        result=setup_rules(known,at,p.setup,p.config,indicator_view=known_indicators(at))
-        events.append({'clock':at.isoformat(),'close':bar['close'],'state':result['state'],'reason_codes':result['reason_codes']})
+        result=setup_rules(known,at,p.setup,p.config,indicator_view=known_indicators(at),pattern_asof_close=True)
+        events.append({'clock':at.isoformat(),'close':bar['close'],'state':result['state'],'price_pattern':result['price_pattern'],'reason_codes':result['reason_codes']})
     return {'clock':p.clock.isoformat(),'symbol':p.symbol,'events':events,'rule_version':RULE_VERSION,
             'scope':loaded['read_scope'],'conflicting_minutes':loaded['conflicting_minutes'],
             'option_pnl':None,'metrics':None,'status':'UNDERLYING_REPLAY_ONLY',
             'gates':['EXACT_CONTRACT_HISTORY_UNVERIFIED','HISTORICAL_BID_ASK_UNAVAILABLE','EXECUTION_COST_MODEL_REQUIRED','EVENT_CALENDAR_UNVERIFIED'],
             'split':'No performance claims or walk-forward statistics until contract/execution gates pass',
-            'latest':setup_rules(visible,p.clock,p.setup,p.config)}
+            'latest':setup_rules(visible,p.clock,p.setup,p.config,pattern_asof_close=True)}
 
 def workspace(store,symbol,clock=None,options=None,contract_id=''):
     clock=clock or datetime.now(timezone.utc);loaded=saved_candles(store,symbol,clock)

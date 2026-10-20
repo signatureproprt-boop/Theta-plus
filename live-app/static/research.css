@@ -14,3 +14,5 @@
 @media(min-width:781px) and (max-width:1000px){#page-research .research-layout{grid-template-columns:minmax(0,1fr) 250px}}
 
 .setup-checks h3{font-size:12px;margin:12px 0 4px;color:var(--text)}.setup-checks small{display:block;font-size:11px;line-height:1.5;margin:3px 0 8px;color:var(--muted)}
+
+.price-pattern{border-left:2px solid var(--mint);padding:8px 10px;background:#111d22}.price-pattern h3{font-size:13px;margin:0 0 6px}

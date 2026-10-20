@@ -210,3 +210,34 @@ def test_future_obstacle_cannot_change_price_room():
     rows=[{'timestamp':start,'high':110,'low':90,'close':100}, {'timestamp':start+60,'high':105,'low':99,'close':104}]
     baseline=r.price_room(rows,at,'CE',100)
     assert r.price_room(rows+[{'timestamp':int(at.timestamp())+60,'high':99999,'low':1,'close':1}],at,'CE',100)==baseline
+
+
+def test_price_trigger_is_visible_without_bypassing_missing_option_or_event_gates(monkeypatch):
+    data=bars(30)
+    for i,row in enumerate(data):
+        row.update(open=100,high=100.2,low=99.8,close=100)
+        if 15<=i<20:row.update(open=100.2,high=101,low=100.2,close=100.8)
+        if 20<=i<25:row.update(open=100.3,high=100.5,low=100.2,close=100.3)
+        if i>=25:row.update(open=100.4,high=101.2,low=100.3,close=101)
+    monkeypatch.setattr(r,'indicators',lambda *args:{'60':{'bias':'BULLISH'},'15':{'bias':'BULLISH'}})
+    at=clock('2026-10-12T09:45:00+05:30')
+    result=r.setup_rules(data,at,'opening_range')
+    assert result['price_pattern']['state']=='TRIGGER_OBSERVED'
+    assert result['price_pattern']['trigger_price']==100.5
+    assert result['price_pattern']['underlying_invalidation']==100.2
+    assert result['state']=='DATA_UNAVAILABLE'
+    assert {'EVENT_CONTEXT_UNAVAILABLE','OPTION_QUOTE_UNAVAILABLE'}.issubset(result['missing'])
+    assert r.setup_rules(data,at+timedelta(minutes=3),'opening_range')['price_pattern']['state']=='DATA_UNAVAILABLE'
+    for row in data:row['received_at']=(at+timedelta(days=1)).isoformat()
+    replay=r.setup_rules(data,at,'opening_range',pattern_asof_close=True)
+    assert replay['price_pattern']['state']=='TRIGGER_OBSERVED'
+    assert replay['price_pattern']['clock_basis']=='BAR_CLOSE_REPLAY_ASSUMPTION'
+    assert replay['state']=='DATA_UNAVAILABLE' and 'CANDLE_FUTURE_TIMESTAMP' in replay['missing']
+
+
+def test_target_reward_is_net_of_exit_specific_costs_not_double_deducted():
+    p=risk(target=120);result=r.risk_plan(p,clock())
+    assert result['quantity']==150 and result['planned_net_reward']==2688.51
+    assert result['net_reward_risk_ratio']==pytest.approx(round(2688.51106/result['planned_stop_loss'],4),abs=.0001)
+    for target in (90,100,float('nan'),float('inf')):
+        with pytest.raises(ValidationError):risk(target=target)
