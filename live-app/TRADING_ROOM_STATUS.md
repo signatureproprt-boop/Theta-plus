@@ -1,4 +1,4 @@
-# Trading Room readiness — 3.6.2
+# Trading Room readiness — 3.6.3
 
 The room is research software, not a validated entry recommendation.
 
@@ -31,3 +31,13 @@ Official Dhan Live Market Feed documentation lists LTT in ticker, quote and full
 - https://dhanhq.co/docs/v2/full-market-depth/
 
 The displayed subscription window and selected live observation bridge have synthetic packet/UI regression tests. Actual market-session delivery is still a rollout verification task.
+
+## Consolidated production audit
+
+Production UI audit observed one HTTP 500 on initial workspace load; a saved-data retry recovered and loaded the chart and chain. Backend root cause is unconfirmed. This release retries a transient workspace GET once and preserves HTTP status for reconnect decisions. It does not automatically retry writes or remove the underlying source failure.
+
+Other confirmed defects fixed: failed selected-contract refresh invalidates earlier setup confirmation; stop/reconnect labels cannot claim an active recent trade; HTTP authentication/validation failures stop reconnect; trend-pullback risk plans preserve their setup in Paper Journal; changing setups invalidates prepared paper plans.
+
+Deployment now reads both actual Trading Room workspace APIs and checks their identity/evidence/setup schema. HTTP 500 or missing setup evidence fails rollout and triggers the existing traffic rollback. Health identity alone is insufficient.
+
+Operational and strategy sign-off remain open: an authorised fresh event source, independently timestamped quote eligibility, market-hour stream/candle/breadth verification, historical failure investigation, exact-contract execution history, and actual forward validation. Unit/UI tests are not a substitute for those checks.

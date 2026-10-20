@@ -17,3 +17,6 @@ test('valid API errors survive and malformed successes are rejected',async()=>{
  for(const body of ['null','[]','"hello"','not-json'])await assert.rejects(e.context.window.thetaReadResponse(new Response(body)));
  assert.equal((await e.context.window.thetaReadResponse(new Response('{"saved":true}'))).saved,true);
 });
+test('non-JSON authentication error retains HTTP status for reconnect policy',async()=>{
+ const e=setup();await assert.rejects(e.context.window.thetaReadResponse(new Response('private upstream body',{status:403})),error=>error.status===403&&!error.message.includes('private upstream'));
+});

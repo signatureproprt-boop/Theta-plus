@@ -10,7 +10,7 @@ function environment(page='options',snapshot={}){
     setAttribute(){},addEventListener(t,fn){this['on'+t]=fn;},querySelector(){return element('submit');},reset(){},insertAdjacentHTML(_where,v){html+=v;}};
     Object.defineProperty(el,'innerHTML',{get:()=>html,set(v){html=v;}});nodes.set(id,el);}return nodes.get(id);}
   const data={server_time:'2026-10-19T07:00:00Z',history:{candles:[],invalid_record_ids:[],conflicting_minutes:0},chain:{status:'TIME_UNVERIFIED',contracts:[],pcr_oi:1.2,pcr_volume:1.4},setups:[],policies:{},availability:{},markets:{items:[]},...snapshot};
-  const context={window:{addEventListener(){}},document:{getElementById:element,querySelectorAll(){return [];}},location:{hash:'#'+page},setInterval:()=>0,Intl,Date,Number,String,Math,Set,Map,FormData:class{constructor(form){return Object.entries(form.fields||{});}},crypto:{randomUUID:()=> 'b'.repeat(32)},AbortSignal:{timeout:()=>undefined},console,fetch:async(url,o={})=>{calls.push({url,o});return {ok:true,status:200,text:async()=>JSON.stringify(url.includes('journal')?{entries:[],next_cursor:null}:data),json:async()=>url.includes('journal')?{entries:[],next_cursor:null}:data};}};
+  const context={window:{addEventListener(){}},document:{getElementById:element,querySelectorAll(){return [];}},location:{hash:'#'+page},setInterval:()=>0,setTimeout:fn=>{fn();return 0;},Intl,Date,Number,String,Math,Set,Map,FormData:class{constructor(form){return Object.entries(form.fields||{});}},crypto:{randomUUID:()=> 'b'.repeat(32)},AbortSignal:{timeout:()=>undefined},console,fetch:async(url,o={})=>{calls.push({url,o});return {ok:true,status:200,text:async()=>JSON.stringify(url.includes('journal')?{entries:[],next_cursor:null}:data),json:async()=>url.includes('journal')?{entries:[],next_cursor:null}:data};}};
   vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/api-response.js'),'utf8'),context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/research.js'),'utf8'),context);
   async function flush(){for(let i=0;i<5;i++)await new Promise(resolve=>setImmediate(resolve));}
   return {context,element,calls,flush,data};
@@ -187,4 +187,19 @@ test('mismatched option identity cannot populate the selected live observation',
   e.context.window.thetaResearchPickContract(contract);await e.flush();
   e.context.window.thetaResearchLiveBatch([{...contract,role:'option',underlying:'nifty',side:'PE',ltp:999}]);
   assert.ok(!e.element('selected-live-observation').innerHTML.includes('999'));
+});
+test('failed contract refresh clears updating state and invalidates earlier confirmation',async()=>{
+  const e=environment('research',{chain:{expiry:contract.expiry,contracts:[contract]},setups:[{setup:'opening_range',state:'CONFIRM',reason_codes:[]}]});await e.flush();
+  e.context.window.thetaApiFetch=async()=>{throw Error('workspace unavailable');};
+  e.context.window.thetaResearchPickContract(contract);await e.flush();
+  const html=e.element('page-research').innerHTML;
+  assert.ok(!html.includes('Updating contract checks'));assert.ok(!html.includes('Trigger met'));
+  assert.match(html,/Workspace refresh failed/);assert.equal(e.element('research-message').textContent,'workspace unavailable');
+});
+
+test('transient workspace GET retries once, without replaying writes',async()=>{
+  const e=environment('research');await e.flush();let calls=0;
+  e.context.window.thetaApiFetch=async()=>{calls++;if(calls===1){const error=Error('temporary');error.status=500;throw error;}return {ok:true,text:async()=>JSON.stringify(e.data)};};
+  await e.element('research-refresh').onclick();await e.flush();
+  assert.equal(calls,2);assert.equal(e.element('research-message').textContent,'');
 });

@@ -42,3 +42,17 @@ def test_public_health_path_avoids_cloud_run_reserved_suffix(monkeypatch):
     monkeypatch.setattr(m.urllib.request, 'urlopen', open_url)
     assert m.fetch_health('https://example.test/', 2) == {}
     assert seen == ['https://example.test/health-check']
+
+
+def test_workspace_smoke_requires_both_symbols_and_setup_evidence():
+    seen=[]
+    def fetch(url,symbol,timeout):
+        seen.append(symbol)
+        return dict(symbol=symbol,mode='READ_ONLY_RESEARCH',history={'candles':[]},chain={'contracts':[]},
+                    setups=[{'setup':'opening_range'},{'setup':'trend_pullback'}])
+    assert m.verify_workspaces('https://example.test',fetch=fetch)
+    assert seen==['nifty','banknifty']
+    with pytest.raises(RuntimeError,match='identity/schema'):
+        m.verify_workspaces('https://example.test',fetch=lambda *args:{'status':'ok'})
+    def unavailable(*args):raise urllib.error.HTTPError('https://example.test',500,'error',{},None)
+    with pytest.raises(urllib.error.HTTPError):m.verify_workspaces('https://example.test',fetch=unavailable)
