@@ -290,7 +290,16 @@ class Collector:
 
     def jobs(self,after=''):
         names=self.store.document_names('jobs/',after,21)
-        return {'jobs':[self.summary(self.store.document(k)[0]) for k in names[:20]],
+        jobs=[];issues=[]
+        for name in names[:20]:
+            job=self.store.document(name)[0]
+            # Listing and reading are separate operations. A retained null
+            # document or a disappeared object must not crash both workspaces.
+            if not isinstance(job,dict) or not job:
+                issues.append({'document':name,'state':'JOB_RECORD_UNAVAILABLE'})
+                continue
+            jobs.append(self.summary(job))
+        return {'jobs':jobs,'read_issues':issues,
                 'next_cursor':names[19] if len(names)>20 else None}
 
     def record_rejection(self,job,task,reason,code=None,http_status=None):
