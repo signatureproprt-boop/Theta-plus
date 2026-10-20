@@ -46,11 +46,11 @@ Use a dense terminal, not a page of large metric cards.
 
 | Region | Desktop target | Content |
 |---|---|---|
-| Header | 48–56 px | Global instrument search; selected exchange; data/session status; token warning |
+| Header | 40–48 px | Global instrument search; selected exchange; data/session status; token warning |
 | Left rail | 52–64 px | Markets, Charts, Options, Futures, Paper, Data operations |
-| Market watch | 220–260 px | Search results/watchlists; symbol, LTP, change and freshness; segment filters |
+| Market watch | 165–200 px | Search results/watchlists; symbol, LTP, change and freshness; segment filters |
 | Main workspace | Flexible | Chart above, tabbed chain/OI/depth/contract-history below |
-| Right inspector | 280–320 px | Exact contract, setup reasons, entry/stop/target, costs, rupee risk, paper action |
+| Right inspector | 210–260 px | Exact contract, setup reasons, entry/stop/target, costs, rupee risk, paper action |
 | Bottom strip | 24–32 px | Feed state, latest provider timestamps, selected-contract status, open paper risk |
 
 At tablet widths, collapse the market watch and open the right inspector as an explicit side drawer. Preserve chart and table space. At phone widths, use Chart / Chain / Contract tabs; retain the contract identity and freshness strip. Never shrink a desktop table until labels become unreadable. Use horizontal scrolling inside wide data tables only.
