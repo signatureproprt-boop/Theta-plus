@@ -25,7 +25,7 @@ from research import workspace, risk_plan, RiskInput, PaperNote, ReplayInput, re
 from live_research import stream as research_live_stream
 from session_chart import refresh_session,refresh_context
 from typing import Literal
-from request_review import diagnose
+from request_review import diagnose,repair_verified_range
 from paper_ledger import PaperOpen,PaperClose,open_trade,close_trade,view as paper_view
 ROOT=Path(__file__).parent
 class DhanTokenInput(Model):
@@ -204,6 +204,13 @@ def create_app(db_path=None):
         key=(payload or {}).get('result_key')
         if key is not None and not isinstance(key,str):raise HTTPException(422,'Choose a result key')
         return await diagnose(collector,jid,key)
+
+    @app.post('/api/collection/jobs/{jid}/repair')
+    async def collection_repair(jid:str,request:Request,payload:dict):
+        require_admin(request)
+        key=payload.get('result_key')
+        if not isinstance(key,str):raise HTTPException(422,'Choose a diagnosed historical result')
+        return await asyncio.to_thread(repair_verified_range,collector,jid,key)
 
     @app.post('/api/collection/jobs/{jid}/{action}')
     def collection_control(jid:str,action:str,request:Request):

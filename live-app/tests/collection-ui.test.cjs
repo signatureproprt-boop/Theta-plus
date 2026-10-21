@@ -243,3 +243,13 @@ test('unavailable job records display a warning instead of claiming there are no
  assert.doesNotMatch(html,/No collection jobs yet/);
  assert.equal(e.element('collection-more').hidden,false);
 });
+
+test('verified-range repair is offered only after a provider-confirmed diagnostic',async()=>{
+ const jid='a'.repeat(32),key='results/'+jid+'/fixture';
+ const e=environment('completed',{responses:{['/api/collection/jobs/'+jid+'/diagnose']:{ok:true,status:200,text:async()=>JSON.stringify({conclusion:'RECENT_RANGE_WORKS_REVIEW_ORIGINAL_DATES',can_repair:true,probes:[{endpoint:'charts/historical',state:'ROWS_PRESENT',rows:5}]})}}});
+ await e.flush();e.element('token-admin-password').value='fixture-admin';await e.click('admin-signin');
+ const b=e.element('job-button');b.dataset.collectionJob=jid;await e.click('job-button');
+ const d=e.element('diagnose-fixture');d.dataset.collectionDiagnose=key;await e.click('diagnose-fixture');
+ assert.match(e.element('collection-feedback').innerHTML,/Prepare verified-range retry/);
+ assert.equal(e.calls.filter(([url])=>url.endsWith('/repair')).length,0);
+});
