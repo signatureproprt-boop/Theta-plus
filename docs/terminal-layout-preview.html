@@ -1,0 +1,253 @@
+<div id="theta-market-design">
+  <style>
+    #theta-market-design{color-scheme:light dark;--tp-bg:light-dark(#f7f9fa,#0b1015);--tp-panel:light-dark(#fff,#111920);--tp-line:light-dark(#dce3e7,#26323b);--tp-text:light-dark(#172832,#e5edf0);--tp-muted:light-dark(#526773,#9aadb7);--tp-accent:light-dark(#116951,#87dbbd);--tp-soft:light-dark(#e6f3ed,#1c332c);color:var(--tp-text);background:var(--tp-bg);font:14px/1.5 system-ui,sans-serif;border:1px solid var(--tp-line);border-radius:10px;overflow:hidden}
+    #theta-market-design *{box-sizing:border-box}
+    #theta-market-design button,#theta-market-design input,#theta-market-design select{font:inherit;color:inherit;background:var(--tp-panel);border:1px solid var(--tp-line);border-radius:5px;padding:6px 9px;min-width:0}
+    #theta-market-design button{cursor:pointer}
+    #theta-market-design button[aria-pressed=true]{color:var(--tp-accent);background:var(--tp-soft);border-color:var(--tp-accent)}
+    #theta-market-design button:focus-visible,#theta-market-design input:focus-visible,#theta-market-design select:focus-visible{outline:2px solid var(--tp-accent);outline-offset:2px}
+    #theta-market-design .tp-top{display:flex;align-items:center;gap:12px;padding:12px 14px;border-bottom:1px solid var(--tp-line);flex-wrap:wrap}
+    #theta-market-design .tp-brand{font-size:19px;font-weight:600;white-space:nowrap;color:var(--tp-accent)}
+    #theta-market-design .tp-top input{flex:1;min-width:160px}
+    #theta-market-design .tp-label{color:var(--tp-muted);font-size:12px}
+    #theta-market-design .tp-nav{display:flex;gap:6px;padding:8px 14px;border-bottom:1px solid var(--tp-line);flex-wrap:wrap}
+    #theta-market-design .tp-shell{display:grid;grid-template-columns:190px minmax(0,1fr) 240px}
+    #theta-market-design .tp-watch{border-right:1px solid var(--tp-line)}
+    #theta-market-design .tp-inspector{border-left:1px solid var(--tp-line);padding:12px;background:var(--tp-panel)}
+    #theta-market-design .tp-section-title{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid var(--tp-line);font-weight:500;gap:8px;flex-wrap:wrap}
+    #theta-market-design .tp-segments{display:flex;gap:5px;flex-wrap:wrap;padding:10px}
+    #theta-market-design .tp-segments button{font-size:12px;padding:5px 7px}
+    #theta-market-design .tp-list{padding:0 8px}
+    #theta-market-design .tp-instrument{display:grid;grid-template-columns:1fr auto;gap:2px 6px;width:100%;text-align:left;border:0;border-bottom:1px solid var(--tp-line);border-radius:0;background:transparent;padding:10px 5px}
+    #theta-market-design .tp-instrument small{grid-column:1/-1;color:var(--tp-muted);font-size:11px}
+    #theta-market-design .tp-workspace{min-width:0}
+    #theta-market-design .tp-workspace-bar{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;padding:10px 12px;border-bottom:1px solid var(--tp-line)}
+    #theta-market-design .tp-times{display:flex;gap:5px;padding:9px 12px;flex-wrap:wrap}
+    #theta-market-design .tp-times span{margin-left:auto;color:var(--tp-muted);font-size:12px;align-self:center}
+    #theta-market-design .tp-chart{margin:0 12px;min-height:235px;display:grid;place-items:center;background-image:linear-gradient(var(--tp-line) 1px,transparent 1px),linear-gradient(90deg,var(--tp-line) 1px,transparent 1px);background-size:100% 58px,76px 100%;border-bottom:1px solid var(--tp-line);position:relative}
+    #theta-market-design .tp-chart-note{padding:10px 16px;background:var(--tp-bg);text-align:center;max-width:90%}
+    #theta-market-design .tp-chart-note strong{font-weight:500;display:block}
+    #theta-market-design .tp-chart-note span{font-size:12px;color:var(--tp-muted)}
+    #theta-market-design .tp-pane-nav{padding:10px 12px;display:flex;gap:5px;flex-wrap:wrap;border-bottom:1px solid var(--tp-line)}
+    #theta-market-design .tp-pane{padding:0 12px 12px}
+    #theta-market-design .tp-chain-meta{display:flex;gap:10px;justify-content:space-between;align-items:center;flex-wrap:wrap;padding:10px 0}
+    #theta-market-design .tp-table-wrap{overflow-x:auto}
+    #theta-market-design table{width:100%;border-collapse:collapse;font-size:12px}
+    #theta-market-design th,#theta-market-design td{text-align:right;padding:8px 7px;border-bottom:1px solid var(--tp-line);white-space:nowrap;font-variant-numeric:tabular-nums}
+    #theta-market-design th{color:var(--tp-muted);font-weight:500}
+    #theta-market-design .tp-rowhead{text-align:left}
+    #theta-market-design .tp-strike{text-align:center;background:var(--tp-panel)}
+    #theta-market-design .tp-empty{padding:30px 12px;text-align:center;color:var(--tp-muted)}
+    #theta-market-design .tp-inspector h3{font-size:14px;font-weight:500;margin:0 0 8px}
+    #theta-market-design .tp-contract{font-size:12px;color:var(--tp-muted);border-bottom:1px solid var(--tp-line);padding-bottom:12px;margin-bottom:12px}
+    #theta-market-design .tp-status{display:inline-block;font-size:11px;background:var(--tp-soft);color:var(--tp-accent);padding:3px 7px;border-radius:4px;margin-bottom:10px}
+    #theta-market-design .tp-pair{display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:6px 0;border-bottom:1px solid var(--tp-line)}
+    #theta-market-design .tp-pair span:first-child{color:var(--tp-muted)}
+    #theta-market-design .tp-risk{margin-top:16px}
+    #theta-market-design .tp-risk label{font-size:12px;color:var(--tp-muted);display:grid;gap:4px;margin:8px 0}
+    #theta-market-design .tp-risk input{width:100%}
+    #theta-market-design .tp-risk button{width:100%;margin-top:8px}
+    #theta-market-design .tp-foot{padding:8px 14px;color:var(--tp-muted);font-size:11px;display:flex;gap:16px;flex-wrap:wrap;border-top:1px solid var(--tp-line)}
+    #theta-market-design .tp-design-view{padding:16px}
+    #theta-market-design .tp-design-view h3{font-size:15px;font-weight:500;margin:0 0 12px}
+    #theta-market-design .tp-data-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+    #theta-market-design .tp-data-lane{background:var(--tp-panel);border:1px solid var(--tp-line);border-radius:5px;padding:14px}
+    #theta-market-design .tp-data-lane strong{font-weight:500;display:block;margin-bottom:10px}
+    #theta-market-design .tp-data-lane span{display:block;padding:7px 0;border-top:1px solid var(--tp-line);font-size:12px;color:var(--tp-muted)}
+    #theta-market-design .tp-flow{padding:12px;margin:12px 0;background:var(--tp-soft);color:var(--tp-accent);text-align:center;font-size:12px}
+    #theta-market-design .tp-selected{padding:10px 0;color:var(--tp-muted);font-size:12px}
+    #theta-market-design .tp-architecture-list{display:flex;flex-wrap:wrap;gap:7px;padding-bottom:10px}
+    #theta-market-design .tp-architecture-detail{padding:14px;background:var(--tp-panel);border:1px solid var(--tp-line);border-radius:5px;font-size:13px}
+    #theta-market-design .tp-coverage th,#theta-market-design .tp-coverage td{white-space:normal;text-align:left;font-size:12px;vertical-align:top;min-width:90px}
+    #theta-market-design [hidden]{display:none!important}
+    #theta-market-design{font-size:13px;line-height:1.4;border-radius:5px}
+    #theta-market-design .tp-top{padding:7px 10px;gap:8px}
+    #theta-market-design .tp-brand{font-size:17px;font-weight:500}
+    #theta-market-design .tp-nav{padding:5px 10px;gap:4px}
+    #theta-market-design button,#theta-market-design input,#theta-market-design select{padding:4px 7px;border-radius:3px}
+    #theta-market-design .tp-shell{grid-template-columns:165px minmax(0,1fr) 210px}
+    #theta-market-design .tp-section-title,#theta-market-design .tp-workspace-bar{padding:7px 9px}
+    #theta-market-design .tp-segments{padding:7px;gap:4px}
+    #theta-market-design .tp-segments button{padding:3px 5px}
+    #theta-market-design .tp-instrument{padding:7px 4px}
+    #theta-market-design .tp-times{padding:6px 9px;gap:4px}
+    #theta-market-design .tp-chart{margin:0 9px;min-height:215px}
+    #theta-market-design .tp-pane-nav{padding:6px 9px;gap:4px}
+    #theta-market-design .tp-pane{padding:0 9px 8px}
+    #theta-market-design .tp-chain-meta{padding:6px 0}
+    #theta-market-design th,#theta-market-design td{padding:5px}
+    #theta-market-design .tp-inspector{padding:9px}
+    #theta-market-design .tp-inspector h3{font-size:13px;margin-bottom:5px}
+    #theta-market-design .tp-contract{padding-bottom:7px;margin-bottom:7px}
+    #theta-market-design .tp-status{padding:2px 5px;margin-bottom:6px}
+    #theta-market-design .tp-pair{padding:4px 0;gap:5px}
+    #theta-market-design .tp-risk{margin-top:10px}
+    #theta-market-design .tp-risk label{margin:5px 0;gap:3px}
+    #theta-market-design .tp-risk button{margin-top:5px}
+    #theta-market-design .tp-selected{padding:6px 0}
+    #theta-market-design .tp-foot{padding:5px 10px;gap:10px}
+    #theta-market-design .tp-design-view{padding:10px}
+    #theta-market-design .tp-data-grid{gap:8px}
+    #theta-market-design .tp-data-lane{padding:9px;border-radius:3px}
+    #theta-market-design .tp-data-lane strong{margin-bottom:6px}
+    #theta-market-design .tp-data-lane span{padding:5px 0}
+    #theta-market-design .tp-flow{padding:8px;margin:8px 0}
+    #theta-market-design .tp-architecture-detail{padding:9px;border-radius:3px}
+    @media(max-width:850px){#theta-market-design .tp-shell{grid-template-columns:150px minmax(0,1fr)}#theta-market-design .tp-inspector{grid-column:1/-1;border-left:0;border-top:1px solid var(--tp-line);display:grid;grid-template-columns:1fr 1fr;gap:12px}#theta-market-design .tp-risk{margin-top:0}}
+    @media(max-width:560px){#theta-market-design .tp-shell{display:block}#theta-market-design .tp-watch{border-right:0;border-bottom:1px solid var(--tp-line)}#theta-market-design .tp-list{display:grid;grid-template-columns:1fr 1fr}#theta-market-design .tp-inspector{display:block}#theta-market-design .tp-risk{margin-top:16px}#theta-market-design .tp-data-grid{grid-template-columns:1fr}#theta-market-design .tp-top input{flex-basis:100%}}
+    @media(pointer:coarse){#theta-market-design button{min-height:44px}#theta-market-design input,#theta-market-design select{min-height:44px;font-size:16px}}
+  </style>
+  <style>
+    #theta-market-design{color-scheme:light;--tp-bg:#f9fafb;--tp-panel:#ffffff;--tp-line:#e7ebed;--tp-text:#3c474c;--tp-muted:#67757d;--tp-accent:#128566;--tp-soft:#edf7f2;border-radius:4px}
+    #theta-market-design .tp-top{background:var(--tp-panel);padding:0 12px;min-height:46px;gap:20px}
+    #theta-market-design .tp-top .tp-nav{padding:0;border:0;flex:1;gap:6px}
+    #theta-market-design .tp-top .tp-nav button{border:0;border-radius:0;background:transparent;min-height:44px;padding:8px 7px;font-size:12px}
+    #theta-market-design .tp-top .tp-nav button[aria-pressed=true]{color:var(--tp-accent);border-bottom:2px solid var(--tp-accent)}
+    #theta-market-design .tp-index-strip{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));background:var(--tp-panel);padding:8px 4px;border-bottom:1px solid var(--tp-line);font-size:11px}
+    #theta-market-design .tp-index-strip div{padding:0 10px;border-right:1px solid var(--tp-line);display:flex;gap:6px;justify-content:space-between;flex-wrap:wrap}
+    #theta-market-design .tp-index-strip span{color:var(--tp-muted)}
+    #theta-market-design .tp-watch{background:var(--tp-panel)}
+    #theta-market-design .tp-search-wrap{padding:10px 8px 5px}
+    #theta-market-design .tp-search-wrap input{width:100%;font-size:12px;padding:7px}
+    #theta-market-design .tp-shell.tp-home-mode{grid-template-columns:200px minmax(0,1fr)}
+    #theta-market-design .tp-watchlist-tabs{display:flex;gap:5px;padding:5px 10px 9px;font-size:11px}
+    #theta-market-design .tp-watchlist-tabs span{border:1px solid var(--tp-line);border-radius:3px;padding:1px 5px}
+    #theta-market-design .tp-watchlist-tabs span:first-child{background:var(--tp-soft);color:var(--tp-accent)}
+    #theta-market-design .tp-home-content{padding:12px;min-width:0}
+    #theta-market-design .tp-note{padding:8px 10px;background:#fffbf3;border:1px solid #f1eadb;border-radius:4px;font-size:11px;color:#746548;margin-bottom:10px}
+    #theta-market-design .tp-home-panel{background:var(--tp-panel);border:1px solid var(--tp-line);border-radius:5px;margin-bottom:10px}
+    #theta-market-design .tp-home-panel h3{font-size:13px;font-weight:500;margin:0;padding:9px 11px;border-bottom:1px solid var(--tp-line)}
+    #theta-market-design .tp-home-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;padding:11px}
+    #theta-market-design .tp-home-summary span{display:block;font-size:11px;color:var(--tp-muted)}
+    #theta-market-design .tp-home-summary strong{font-size:14px;font-weight:500;display:block;margin-top:3px}
+    #theta-market-design .tp-home-columns{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:10px;align-items:start}
+    #theta-market-design .tp-market-links{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:2px;padding:8px}
+    #theta-market-design .tp-market-links button{border:0;text-align:left;padding:9px 6px;background:transparent;font-size:12px}
+    #theta-market-design .tp-market-links button:hover{background:var(--tp-soft)}
+    #theta-market-design .tp-subtabs{display:flex;gap:5px;padding:8px 10px;flex-wrap:wrap}
+    #theta-market-design .tp-subtabs button{font-size:11px;padding:3px 6px}
+    #theta-market-design .tp-home-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;padding:8px 11px;border-top:1px solid var(--tp-line);font-size:12px}
+    #theta-market-design .tp-home-row small{color:var(--tp-muted);font-size:11px}
+    #theta-market-design .tp-home-status{padding:9px 11px;border-top:1px solid var(--tp-line);font-size:11px;color:var(--tp-muted)}
+    @media(max-width:700px){#theta-market-design .tp-top{gap:8px}#theta-market-design .tp-index-strip{grid-template-columns:repeat(3,minmax(0,1fr));gap:7px 0}#theta-market-design .tp-shell.tp-home-mode{grid-template-columns:165px minmax(0,1fr)}#theta-market-design .tp-home-columns{grid-template-columns:1fr}#theta-market-design .tp-home-summary{grid-template-columns:1fr 1fr}}
+    @media(max-width:560px){#theta-market-design .tp-shell.tp-home-mode{display:block}#theta-market-design .tp-top .tp-nav{flex-basis:100%}#theta-market-design .tp-top>.tp-label{display:none}#theta-market-design .tp-market-links{grid-template-columns:1fr 1fr}}
+  </style>
+  <style>
+    #theta-market-design{font-size:11px;line-height:1.35}
+    #theta-market-design .tp-top{min-height:40px;padding:0 12px;gap:12px}
+    #theta-market-design .tp-top .tp-nav button{min-height:38px;padding:5px 7px;font-size:11px}
+    #theta-market-design .tp-brand{font-size:16px}
+    #theta-market-design .tp-label{font-size:11px}
+    #theta-market-design .tp-index-strip{padding:7px 4px;font-size:11px}
+    #theta-market-design .tp-shell.tp-home-mode{grid-template-columns:23% minmax(0,1fr)}
+    #theta-market-design .tp-home-content{padding:10px 12px}
+    #theta-market-design .tp-home-columns{grid-template-columns:minmax(0,1.45fr) minmax(0,1fr);gap:12px}
+    #theta-market-design .tp-home-panel{margin-bottom:10px;border-radius:5px}
+    #theta-market-design .tp-home-panel h3{padding:8px 10px;font-size:12px;line-height:1.25}
+    #theta-market-design .tp-home-summary{padding:10px;gap:8px}
+    #theta-market-design .tp-home-summary strong{font-size:13px;margin-top:3px}
+    #theta-market-design .tp-home-status{padding:6px 10px;font-size:11px}
+    #theta-market-design .tp-home-row{padding:6px 10px;min-height:27px;font-size:11px;align-items:center}
+    #theta-market-design .tp-home-row button{min-height:22px;font-size:11px;padding:2px 7px}
+    #theta-market-design .tp-market-links{padding:8px;gap:2px}
+    #theta-market-design .tp-market-links button{padding:8px 5px;min-height:31px;font-size:11px}
+    #theta-market-design .tp-subtabs{padding:6px 9px;gap:4px}
+    #theta-market-design .tp-subtabs button{min-height:22px;padding:2px 5px;font-size:11px}
+    #theta-market-design .tp-search-wrap{padding:12px 10px 6px}
+    #theta-market-design .tp-search-wrap input{min-height:26px;padding:5px 7px;font-size:11px}
+    #theta-market-design .tp-section-title{padding:7px 10px;font-size:11px;min-height:28px}
+    #theta-market-design .tp-segments{padding:5px 9px;gap:4px}
+    #theta-market-design .tp-segments button{min-height:22px;padding:2px 4px;font-size:11px}
+    #theta-market-design .tp-watchlist-tabs{padding:5px 10px 7px}
+    #theta-market-design .tp-instrument{padding:7px 4px;min-height:39px;font-size:11px;gap:3px}
+    #theta-market-design .tp-note{padding:7px 10px;margin-bottom:10px;min-height:36px;font-size:11px}
+    #theta-market-design .tp-contract,#theta-market-design .tp-pair,#theta-market-design .tp-risk label{font-size:11px}
+    #theta-market-design .tp-times button,#theta-market-design .tp-pane-nav button{min-height:24px;padding:3px 6px;font-size:11px}
+    #theta-market-design .tp-foot{padding:5px 10px;font-size:11px}
+    #theta-market-design .tp-portfolio-title{display:flex;align-items:center;gap:9px;padding:7px 10px;flex-wrap:wrap;border-bottom:1px solid var(--tp-line)}
+    #theta-market-design .tp-portfolio-title h3{padding:0;border:0;margin:0}
+    #theta-market-design .tp-portfolio-title .tp-subtabs{padding:0}
+    #theta-market-design .tp-portfolio-footer{display:flex;justify-content:space-between;gap:9px;flex-wrap:wrap;padding:7px 10px;border-top:1px solid var(--tp-line);background:#fdfbf8;font-size:11px}
+    @media(max-width:700px){#theta-market-design .tp-shell.tp-home-mode{grid-template-columns:180px minmax(0,1fr)}#theta-market-design .tp-home-columns{grid-template-columns:1fr}}
+    @media(max-width:560px){#theta-market-design .tp-shell.tp-home-mode{display:block}#theta-market-design .tp-home-summary{grid-template-columns:1fr 1fr}}
+  </style>
+  <div class="tp-top"><span class="tp-brand">θ theta+</span><div class="tp-nav" role="group" aria-label="Design views"><button data-view="home" aria-pressed="true">Home</button><button data-view="terminal" aria-pressed="false">Trading Room</button><button data-view="coverage" aria-pressed="false">Data Quality</button><button data-view="architecture" aria-pressed="false">Architecture</button></div><span class="tp-label">Reference-size design · not live</span></div>
+  <div class="tp-index-strip" aria-label="Index strip layout"><div>NIFTY 50 <span>—</span></div><div>NIFTY NEXT 50 <span>—</span></div><div>BANK NIFTY <span>—</span></div><div>INDIA VIX <span>—</span></div><div>FIN NIFTY <span>—</span></div></div>
+  <div id="tp-terminal">
+    <div class="tp-shell tp-home-mode">
+      <aside class="tp-watch" aria-label="Market watch design">
+        <div class="tp-search-wrap"><input id="tp-search" aria-label="Search preview instrument list" placeholder="Search instruments"></div>
+        <div class="tp-section-title">First watchlist <span class="tp-label">▾</span></div>
+        <div class="tp-watchlist-tabs" aria-label="Watchlist group placement"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span></div>
+        <div class="tp-segments" role="group" aria-label="Instrument segment"><button data-segment="indices" aria-pressed="false">Indices</button><button data-segment="equity" aria-pressed="true">Equity</button><button data-segment="futures" aria-pressed="false">Futures</button><button data-segment="commodity" aria-pressed="false">Commodity</button><button data-segment="currency" aria-pressed="false">Currency</button></div>
+        <div id="tp-watchlist" class="tp-list"></div>
+        <div class="tp-selected" style="padding:12px">Name · LTP · LTP %</div>
+      </aside>
+      <section class="tp-workspace" aria-label="Chart and chain design">
+        <div id="tp-home-content" class="tp-home-content">
+          <div class="tp-note">Reference layout · market values require verified provider data. No live prices are shown in this preview.</div>
+          <div class="tp-home-panel"><div class="tp-portfolio-title"><h3>My portfolio</h3><div class="tp-subtabs" role="group" aria-label="Portfolio category preview"><button data-portfolio="All" aria-pressed="true">All</button><button data-portfolio="Stocks" aria-pressed="false">Stocks</button><button data-portfolio="Mutual funds" aria-pressed="false">Mutual funds</button><button data-portfolio="ETFs" aria-pressed="false">ETFs</button></div></div><div class="tp-home-summary"><div><span>Investment</span><strong>₹ —</strong></div><div><span>Current value</span><strong>₹ —</strong></div><div><span>Overall profits</span><strong>₹ —</strong></div><div><span>Today's profit</span><strong>₹ —</strong></div></div><div class="tp-portfolio-footer"><span>Today's P&amp;L: ₹ —</span><span>Open positions: —</span><span>Margin available: ₹ —</span></div><div id="tp-portfolio-state" class="tp-home-status">Layout only · account data not connected</div></div>
+          <div class="tp-home-columns"><div>
+            <div class="tp-home-panel"><h3>Invest / trade on stock exchanges</h3><div class="tp-market-links"><button data-open-segment="equity">Equities</button><button disabled>Mutual funds</button><button data-open-segment="equity">ETFs</button><button data-open-segment="indices" data-open-pane="chain">Options</button><button data-open-segment="futures">Futures</button><button data-open-segment="commodity">Commodities</button></div><div class="tp-home-row"><span>Currency</span><button data-open-segment="currency">Explore</button></div><div class="tp-home-row"><span>Chart / chain / ₹ risk</span><button data-open-terminal="true">Open research</button></div></div>
+            <div class="tp-home-panel"><h3>Trending stocks</h3><div class="tp-subtabs" role="group" aria-label="Trending category preview"><button data-trending="Stocks in news" aria-pressed="true">Stocks in news</button><button data-trending="Most traded" aria-pressed="false">Most traded</button><button data-trending="Most active" aria-pressed="false">Most active</button></div><div class="tp-home-row"><span id="tp-trending-state">Verified source required</span><span>—</span></div><div class="tp-home-row"><span>—</span><span>—</span></div><div class="tp-home-row"><span>—</span><span>—</span></div></div>
+            <div class="tp-home-panel"><h3>Data coverage</h3><div class="tp-home-row"><span>Instrument master</span><small>Versioned catalogue</small></div><div class="tp-home-row"><span>Historical candles</span><small>Coverage verification pending</small></div><div class="tp-home-row"><span>Quotes / option chains</span><small>Snapshot provenance required</small></div><div class="tp-home-row"><span>Live / depth recorder</span><small>Proposed architecture</small></div></div>
+          </div><div>
+            <div class="tp-home-panel"><h3>Market movers</h3><div class="tp-subtabs" role="group" aria-label="Market movers preview"><button data-mover="Gainers" aria-pressed="true">Gainers</button><button data-mover="Losers" aria-pressed="false">Losers</button><button data-mover="Volume" aria-pressed="false">Volume</button></div><div class="tp-home-row"><span id="tp-mover-state">Gainers · snapshot required</span><span>—</span></div><div class="tp-home-row"><small>Symbol</small><small>LTP / change</small></div><div class="tp-home-row"><span>—</span><span>—</span></div><div class="tp-home-row"><span>—</span><span>—</span></div></div>
+            <div class="tp-home-panel"><h3>Options overview</h3><div class="tp-home-row"><span>Underlying / expiry</span><span>—</span></div><div class="tp-home-row"><span>OI PCR / volume PCR</span><span>—</span></div><div class="tp-home-row"><span>Max OI / daily ΔOI</span><span>—</span></div><div class="tp-home-row"><span>Spread / liquidity</span><span>—</span></div></div>
+            <div class="tp-home-panel"><h3>Context sources</h3><div class="tp-home-row"><span>News / fundamentals</span><small>Source not connected</small></div><div class="tp-home-row"><span>Economic events</span><small>Source not connected</small></div><div class="tp-home-status">No inferred news, portfolio balances or rankings</div></div>
+          </div></div>
+        </div>
+        <div id="tp-trading-content" hidden>
+        <div class="tp-workspace-bar"><strong id="tp-symbol" style="font-weight:500">NIFTY</strong><span class="tp-label" id="tp-identity">NSE · INDEX · ID 13</span><span class="tp-label">Price — · quote time —</span></div>
+        <div class="tp-times" role="group" aria-label="Chart interval"><button data-interval="1m" aria-pressed="false">1m</button><button data-interval="5m" aria-pressed="true">5m</button><button data-interval="15m" aria-pressed="false">15m</button><button data-interval="1H" aria-pressed="false">1H</button><button data-interval="1D" aria-pressed="false">1D</button><span>EMA · Levels · Futures VWAP</span></div>
+        <div class="tp-chart" role="img" aria-label="Chart placement with no market prices drawn"><div class="tp-chart-note"><strong id="tp-chart-label">NIFTY · 5m chart</strong><span>Provider candles + gap markers<br>No illustrative prices or signals</span></div></div>
+        <div class="tp-pane-nav" role="group" aria-label="Analysis pane"><button data-pane="chain" aria-pressed="true">Option chain</button><button data-pane="oi" aria-pressed="false">OI / PCR</button><button data-pane="depth" aria-pressed="false">Depth</button><button data-pane="history" aria-pressed="false">History</button></div>
+        <div class="tp-pane"><div class="tp-chain-meta"><label class="tp-label">Expiry <select id="tp-expiry" aria-label="Preview expiry"><option>Select verified expiry</option></select></label><span class="tp-label">OI PCR — · Vol PCR —</span></div><div id="tp-analysis-content"></div></div>
+        </div>
+      </section>
+      <aside class="tp-inspector" aria-label="Contract and risk inspector design" hidden>
+        <div><h3>Selected contract</h3><div class="tp-contract">Expiry / strike / CE–PE / ID / lot<br>Retained until you change selection</div><span class="tp-status">NO CONTRACT SELECTED</span><div class="tp-pair"><span>Premium · bid / ask</span><span>—</span></div><div class="tp-pair"><span>Spread / liquidity</span><span>—</span></div><div class="tp-pair"><span>OI / ΔOI</span><span>—</span></div><div class="tp-pair"><span>IV / Greeks eligibility</span><span>—</span></div><h3 style="margin-top:16px">Setup evidence</h3><div class="tp-pair"><span>Price pattern</span><span>Unavailable</span></div><div class="tp-pair"><span>Trade eligibility</span><span>Blocked</span></div><div class="tp-selected">Trigger · underlying invalidation · reason codes</div></div>
+        <div class="tp-risk"><h3>Premium → ₹ risk</h3><label>Entry / stop / target<input disabled placeholder="User assumptions + exact contract"></label><label>Costs / ₹ budget / daily cap<input disabled placeholder="Explicit inputs required"></label><div class="tp-pair"><span>Lots / quantity</span><span>—</span></div><div class="tp-pair"><span>Planned loss / net R:R</span><span>—</span></div><button disabled>Prepare paper record</button><div class="tp-selected">Preview only · no order action</div></div>
+      </aside>
+    </div>
+    <div class="tp-foot"><span>Selected identity stays fixed</span><span>Every value has source + clock</span><span>No broker execution</span></div>
+  </div>
+  <section id="tp-architecture" class="tp-design-view" hidden>
+    <h3>One data foundation · every market screen</h3>
+    <div class="tp-data-grid"><div class="tp-data-lane"><strong>Sources</strong><span>Full instrument master</span><span>Quotes + all-strike chains</span><span>Active + rolling history</span><span>Live feed + entitled depth</span></div><div class="tp-data-lane"><strong>Independent collection lanes</strong><span>Current quotes</span><span>Option-bearing underlyings / expiries</span><span>Recent candle gaps</span><span>Long historical backfill</span></div><div class="tp-data-lane"><strong>Shared platform</strong><span>SDK adapter + endpoint quotas</span><span>Immutable raw responses</span><span>Identity / time normalization</span><span>Coverage index + stream fan-out</span></div></div>
+    <div class="tp-flow">Searchable read API → market watch / chart / chain / contract inspector → shared rules / ₹ risk / paper ledger</div>
+    <div class="tp-architecture-list" role="group" aria-label="Architecture detail"><button data-detail="identity" aria-pressed="true">Identity</button><button data-detail="freshness" aria-pressed="false">Freshness</button><button data-detail="scheduler" aria-pressed="false">Scheduler</button><button data-detail="storage" aria-pressed="false">Storage</button><button data-detail="live" aria-pressed="false">Continuous live</button></div>
+    <div id="tp-architecture-detail" class="tp-architecture-detail" aria-live="polite"></div>
+    <div class="tp-selected">Target architecture. Search index, shared stream fan-out and continuous recorder are not implemented by this design preview.</div>
+  </section>
+  <section id="tp-coverage" class="tp-design-view" hidden>
+    <h3>Observed collection vs target coverage</h3><div class="tp-label" style="margin-bottom:12px">Production observations · 20 Oct 2026, around 21:48 IST · not a live status feed</div>
+    <div class="tp-table-wrap"><table class="tp-coverage"><thead><tr><th>Data family</th><th>Observed</th><th>Still required</th></tr></thead><tbody><tr><td>Full master</td><td>211,945 catalogue entries retained</td><td>21,144 NSE_M mappings unresolved; master metadata is not price coverage</td></tr><tr><td>History</td><td>Existing job running; ~3.01m returned rows/frames</td><td>Failed requests, missing dates, complete calendar checks, catalogue deltas</td></tr><tr><td>Current quotes</td><td>All-symbol sweep started; initial raw batches empty</td><td>Diagnose omissions with smaller probes; no confirmed all-market quote capture</td></tr><tr><td>Option chains</td><td>Separate sweep running; actual NIFTY expiry snapshots saved</td><td>Remaining underlyings / expiries; derivative-aware discovery; commodity chain mapping</td></tr><tr><td>Live / depth</td><td>Selected browser feed + bounded samples exist</td><td>Continuous server recorder and shared subscriptions</td></tr><tr><td>Website extras</td><td>Not established as public DhanHQ data</td><td>Verify sources for news, fundamentals, screeners and international context</td></tr></tbody></table></div>
+    <div class="tp-flow">Complete = verified coverage by instrument + family + date range. An installed SDK or exhausted job queue does not prove it.</div>
+  </section>
+  <div class="tp-foot"><span>Design reference: Dhan terminal workflow</span><span>Theta Plus identity · data-first architecture</span></div>
+  <script>
+    (()=>{
+      const root=document.getElementById('theta-market-design');
+      const groups={indices:[['NIFTY','NSE · INDEX · ID 13'],['BANKNIFTY','NSE · INDEX · ID 25'],['SENSEX','BSE · INDEX'],['INDIA VIX','NSE · INDEX']],equity:[['Adani Ports & SEZ','NSE · EQUITY'],['Bajaj Finance','NSE · EQUITY'],['Tata Motors Passenger Vehicles','NSE · EQUITY'],['Maruti Suzuki','NSE · EQUITY'],['Mahindra & Mahindra','NSE · EQUITY'],['UltraTech Cement','NSE · EQUITY'],['Sun Pharmaceutical','NSE · EQUITY'],['Power Grid Corporation','NSE · EQUITY'],['Titan','NSE · EQUITY']],futures:[['Index futures','Choose exact expiry'],['Stock futures','Choose exact expiry']],commodity:[['GOLD','MCX · choose exact future'],['SILVER','MCX · choose exact future'],['CRUDEOIL','MCX · choose exact future'],['NATURALGAS','MCX · choose exact future']],currency:[['USDINR','NSE / BSE · choose contract'],['Currency contracts','Verified segment mapping']]};
+      const details={identity:'One exact identity joins every screen: exchange + segment + security ID + expiry + strike + side + lot size + master version. ATM highlighting never replaces a selected contract.',freshness:'Retain exchange/event time, last-trade time and receipt time separately. Missing bid/ask exchange time stays unverified. Market closed, stale data and provider failure are different states.',scheduler:'Current quotes, option chains, recent gaps and long backfill progress independently. Shared endpoint quotas, bounded retries and explicit failed outcomes prevent one long queue from starving the terminal.',storage:'Keep existing GCS raw responses and checkpoints. Add a searchable read index and partitioned bulk history with raw checksums and lineage. New cloud services require a separate implementation and cost decision.',live:'Target: one persistent server recorder with a provider subscription budget, exact-identity deduplication and fan-out to browser clients. Existing ten-second captures and tab-owned streams do not prove continuous recording.'};
+      let segment='equity',selected='NIFTY',interval='5m',pane='chain';
+      function press(selector,target){root.querySelectorAll(selector).forEach(b=>b.setAttribute('aria-pressed',String(b===target)));}
+      function heading(){root.querySelector('#tp-symbol').textContent=selected;root.querySelector('#tp-chart-label').textContent=selected+' · '+interval+' chart';}
+      function watch(){const q=root.querySelector('#tp-search').value.toLowerCase();const box=root.querySelector('#tp-watchlist');box.replaceChildren();let found=0;for(const [name,id] of groups[segment]){if(!(name+' '+id).toLowerCase().includes(q))continue;found++;const b=document.createElement('button');b.className='tp-instrument';b.setAttribute('aria-pressed',String(name===selected));const label=document.createElement('span');label.textContent=name;const price=document.createElement('span');price.textContent='—';const meta=document.createElement('small');meta.textContent=id;b.append(label,price,meta);b.addEventListener('click',()=>{selected=name;root.querySelector('#tp-identity').textContent=id;heading();watch();});box.append(b);}if(!found){const no=document.createElement('div');no.className='tp-selected';no.textContent='No match in this preview list';box.append(no);}}
+      function analysis(){const box=root.querySelector('#tp-analysis-content');if(pane==='chain'){box.innerHTML='<div class="tp-table-wrap"><table><thead><tr><th>CE OI</th><th>CE ΔOI</th><th>CE bid / ask</th><th class="tp-strike">Strike</th><th>PE bid / ask</th><th>PE ΔOI</th><th>PE OI</th></tr></thead><tbody>'+['ATM − 2','ATM − 1','ATM','ATM + 1','ATM + 2'].map(s=>'<tr><td>—</td><td>—</td><td>—</td><td class="tp-strike">'+s+'</td><td>—</td><td>—</td><td>—</td></tr>').join('')+'</tbody></table></div><div class="tp-selected">All strikes retained · selected expiry · same snapshot clock · click CE/PE premium to lock a contract</div>';}else{const copy={oi:'OI bars · daily ΔOI · expiry-specific PCR · actual snapshot history only',depth:'Exact instrument · verified depth entitlement · independent timestamp',history:'Requested range · returned range · gaps · conflicts · raw response lineage'};box.replaceChildren();const p=document.createElement('div');p.className='tp-empty';p.textContent=copy[pane];box.append(p);}}
+      function view(v){root.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.view===v)));root.querySelector('#tp-terminal').hidden=!['home','terminal'].includes(v);root.querySelector('#tp-home-content').hidden=v!=='home';root.querySelector('#tp-trading-content').hidden=v!=='terminal';root.querySelector('.tp-inspector').hidden=v!=='terminal';root.querySelector('.tp-shell').classList.toggle('tp-home-mode',v==='home');['architecture','coverage'].forEach(k=>root.querySelector('#tp-'+k).hidden=v!==k);}
+      root.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>view(b.dataset.view)));
+      root.querySelectorAll('[data-open-segment],[data-open-terminal]').forEach(b=>b.addEventListener('click',()=>{if(b.dataset.openSegment){segment=b.dataset.openSegment;selected=groups[segment][0][0];root.querySelector('#tp-identity').textContent=groups[segment][0][1];root.querySelector('#tp-search').value='';root.querySelectorAll('[data-segment]').forEach(s=>s.setAttribute('aria-pressed',String(s.dataset.segment===segment)));heading();watch();}if(b.dataset.openPane){pane=b.dataset.openPane;root.querySelectorAll('[data-pane]').forEach(p=>p.setAttribute('aria-pressed',String(p.dataset.pane===pane)));analysis();}view('terminal');}));
+      root.querySelectorAll('[data-mover]').forEach(b=>b.addEventListener('click',()=>{press('[data-mover]',b);root.querySelector('#tp-mover-state').textContent=b.dataset.mover+' · snapshot required';}));
+      root.querySelectorAll('[data-portfolio]').forEach(b=>b.addEventListener('click',()=>{press('[data-portfolio]',b);root.querySelector('#tp-portfolio-state').textContent=b.dataset.portfolio+' · account data not connected';}));
+      root.querySelectorAll('[data-trending]').forEach(b=>b.addEventListener('click',()=>{press('[data-trending]',b);root.querySelector('#tp-trending-state').textContent=b.dataset.trending+' · verified source required';}));
+      root.querySelectorAll('[data-segment]').forEach(b=>b.addEventListener('click',()=>{segment=b.dataset.segment;press('[data-segment]',b);root.querySelector('#tp-search').value='';selected=groups[segment][0][0];root.querySelector('#tp-identity').textContent=groups[segment][0][1];heading();watch();}));
+      root.querySelectorAll('[data-interval]').forEach(b=>b.addEventListener('click',()=>{interval=b.dataset.interval;press('[data-interval]',b);heading();}));
+      root.querySelectorAll('[data-pane]').forEach(b=>b.addEventListener('click',()=>{pane=b.dataset.pane;press('[data-pane]',b);analysis();}));
+      root.querySelectorAll('[data-detail]').forEach(b=>b.addEventListener('click',()=>{press('[data-detail]',b);root.querySelector('#tp-architecture-detail').textContent=details[b.dataset.detail];}));
+      root.querySelector('#tp-search').addEventListener('input',watch);
+      root.querySelector('#tp-architecture-detail').textContent=details.identity;watch();analysis();
+    })();
+  </script>
+</div>
