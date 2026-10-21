@@ -64,9 +64,34 @@ async def _diagnose(collector,jid,job,task,owner,result_key):
         except ProviderError as exc:probe.update(state='REJECTED',code=exc.code,reason=str(exc))
         report['probes'].append(probe)
         if probe.get('code') in ('DH-901','DH-902','DH-904','805','806','807','808','809','810','BUDGET'):break
+    report['can_repair']=any(p['state']=='ROWS_PRESENT' and p['endpoint']==('charts/historical' if task['family']=='daily' else 'charts/intraday') for p in report['probes'])
     report['conclusion']='RECENT_RANGE_WORKS_REVIEW_ORIGINAL_DATES' if report['probes'][0]['state']=='ROWS_PRESENT' else 'SOURCE_REQUEST_REMAINS_UNRESOLVED'
     if len(report['probes'])==2 and report['probes'][0]['state']=='REJECTED' and report['probes'][1]['state']=='ROWS_PRESENT':
         report['conclusion']='RECENT_INTRADAY_AVAILABLE_DAILY_REQUEST_REJECTED'
     from collection import replace
     replace(collector.store,'research/request-review/'+jid,lambda _:report)
     return report
+
+
+def repair_verified_range(collector,jid,result_key):
+    """Only a provider-observed window becomes a separate, explicit retry plan."""
+    report=collector.store.document('research/request-review/'+jid)[0] or {}
+    if not result_key or report.get('result_key')!=result_key or not report.get('can_repair'):
+        raise HTTPException(409,'Diagnose this result and verify returned history before preparing a repair')
+    task=report['original_task'];family=task['family']
+    endpoint='charts/historical' if family=='daily' else 'charts/intraday'
+    probe=next((p for p in report['probes'] if p['endpoint']==endpoint and p['state']=='ROWS_PRESENT'),None)
+    if not probe:raise HTTPException(409,'No verified window for this data family')
+    start=probe['request']['fromDate'][:10];end=probe['request']['toDate'][:10]
+    if not task['from']<=start<end<=task['to']:raise HTTPException(409,'Diagnostic range is outside the original request')
+    child=collector.retry(jid,result_key)
+    from collection import replace
+    def bounded(job):
+        job['current']={**job['current'],'from':start,'to':end}
+        job['config']={**job['config'],'start':start,'end':end,'families':[family],
+                       'symbols':[task['item']['symbol']],'segments':[task['item']['segment']]}
+        job['repair_scope']='VERIFIED_WINDOW_ONLY_ORIGINAL_GAP_REMAINS'
+        job['message']='Verified-window retry ready. Original failed range and outcome remain unchanged. Resume to save only this bounded range.'
+        job.pop('request_error',None)
+        return job
+    return collector.summary(replace(collector.store,'jobs/'+child['id'],bounded))

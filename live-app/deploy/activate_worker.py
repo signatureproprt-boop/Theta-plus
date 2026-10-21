@@ -51,5 +51,5 @@ if __name__=='__main__':
     traffic=[t for t in revision['status']['traffic'] if t.get('percent',0)>0]
     if len(traffic)!=1 or traffic[0]['percent']!=100:raise SystemExit('One verified serving revision required')
     candidate=json.loads(gcloud('run','revisions','describe',traffic[0]['revisionName'],'--format=json'))
-    if not re.fullmatch(r'theta-plus-f372-[0-9]{14}',traffic[0]['revisionName']):raise SystemExit('Collector repair release must be serving first')
+    if not re.fullmatch(r'theta-plus-f380-[0-9]{14}',traffic[0]['revisionName']):raise SystemExit('Collector repair release must be serving first')
     activate(candidate['status']['imageDigest'])

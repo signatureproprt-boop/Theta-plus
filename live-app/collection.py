@@ -263,6 +263,7 @@ class Collector:
             for p in sorted(cat['pages'],key=lambda p:(0 if p['group']=='IDX_I-INDEX' else 1 if p['group'].startswith('NSE_EQ-') else 2,p['key'])):
                 rolling=p['group']=='rolling-underlyings'
                 if (family=='rolling')!=rolling:continue
+                if config['segments'] and not rolling and not any(p['group'].startswith(segment+'-') for segment in config['segments']):continue
                 pages.append({**p,'family':family})
         job={'id':uuid.uuid4().hex,'created_at':now(),'updated_at':now(),'state':'paused',
              'catalogue_sha256':cat['sha256'],'catalogue_rows':cat['rows'],'config':config,
@@ -715,6 +716,8 @@ class Collector:
                         else:response=await self.acquire_data(owner,task)
                         await asyncio.to_thread(install_once,self.store,raw_key,response)
                     result=await asyncio.to_thread(self.persist_result,task,response)
+                    from research_archive import publish
+                    await asyncio.to_thread(publish,self.store,task,response,result)
                     result['status']='partial' if result['rows'] and result.get('missing_security_ids') else 'completed' if result['rows'] else 'empty'
                     result['raw_key']=raw_key
                 entry={'task':task,'result':result,'checked_at':now()}

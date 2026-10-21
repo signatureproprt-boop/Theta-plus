@@ -102,6 +102,7 @@
     finally{sessionLoading=false;if(node('research-session-refresh'))node('research-session-refresh').disabled=false;if(node('research-session-state'))node('research-session-state').textContent=sessionMessage;if(symbol===requested&&requestedId===requestId&&(current==='research'||current==='options'))render();}
   };
   setInterval(()=>{window.thetaSessionRefresh();if(current==='research'){if(session&&node('research-session-state')){const age=Date.now()-Date.parse(session.received_at);node('research-session-state').textContent=sessionMessage+(age>90000?' · REFRESH STALE':'');}drawChart();}},60000);
+  window.thetaResearchSelectSymbol=value=>{if(!['nifty','banknifty'].includes(value))return;const select=node('research-symbol');if(select?.onchange){select.value=value;select.onchange({target:select});}};
   window.thetaResearchSnapshot=()=>({data,selected,symbol,current,context:session?.context});
   function pickContract(row){if(!row)return;selected=row;riskRevision++;riskDraft={};riskResult='';selectionNotice='';selectionPending=true;window.thetaPaperPlanClear?.();render();load();}
   window.thetaResearchPickContract=row=>{pickContract(data?.chain?.contracts.find(c=>c.security_id===row.security_id)||{...row,last_price:row.ltp,freshness:row.quote_state});};

@@ -125,7 +125,8 @@
       if (b.id==='collection-results-more') await results(true);
       if (b.dataset.collectionExport) download('dhan-raw.json',await get('export/'+b.dataset.collectionExport));
       if (b.dataset.collectionRetry) {running=false;showJob(await write('retry',{job_id:active,key:b.dataset.collectionRetry}));await refresh();feedback('Retry job created. Resume when ready.');}
-      if (b.dataset.collectionDiagnose) {const id=active;feedback('Checking exact master identity and a bounded provider request. The saved checkpoint is retained.');const report=await write('jobs/'+id+'/diagnose',{result_key:b.dataset.collectionDiagnose});feedback('Diagnosis: '+report.conclusion+' · '+report.probes.map(p=>p.endpoint+': '+p.state+(p.rows!==undefined?' ('+p.rows+' rows)':'')).join(' · '));}
+      if (b.dataset.collectionRepair) {running=false;showJob(await write('jobs/'+active+'/repair',{result_key:b.dataset.collectionRepair}));await refresh();feedback('Verified-range retry prepared. Resume to save that range; original historical gap remains visible.');}
+      if (b.dataset.collectionDiagnose) {const id=active;feedback('Checking exact master identity and a bounded provider request. The saved checkpoint is retained.');const report=await write('jobs/'+id+'/diagnose',{result_key:b.dataset.collectionDiagnose});feedback('Diagnosis: '+report.conclusion+' · '+report.probes.map(p=>p.endpoint+': '+p.state+(p.rows!==undefined?' ('+p.rows+' rows)':'')).join(' · '));if(report.can_repair)$('#collection-feedback').insertAdjacentHTML('beforeend',` <button class="button secondary" data-collection-repair="${esc(b.dataset.collectionDiagnose)}">Prepare verified-range retry</button>`);}
     } catch(ex) {feedback(ex.message);}
     finally {b.disabled=false;syncPolicyButtons();}
   });

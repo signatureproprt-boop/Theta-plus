@@ -62,6 +62,18 @@ def saved_candles(store,symbol,clock=None,record_limit=100):
             row.update(exchange_at=at.isoformat(),closed_at=(at+timedelta(minutes=1)).isoformat(),received_at=m.get('fetched_at') or saved['created_at'])
             if t in rows and any(rows[t][k]!=row[k] for k in ('open','high','low','close','volume')):conflicts.add(t)
             else:rows[t]=row
+    from research_archive import history_days
+    for source,received,archived in history_days(store,symbol,clock or datetime.now(timezone.utc)):
+        sources.append(source)
+        for row in archived:
+            at=stamp(row.get('timestamp'))
+            if at is None or at+timedelta(minutes=1)>(clock or datetime.now(timezone.utc)):continue
+            local=at.astimezone(IST)
+            if local.weekday()>4 or not '09:15'<=local.strftime('%H:%M')<'15:30':continue
+            t=row['timestamp'];candidate={k:row[k] for k in ('timestamp','open','high','low','close','volume')}
+            candidate.update(exchange_at=at.isoformat(),closed_at=(at+timedelta(minutes=1)).isoformat(),received_at=received)
+            if t in rows and any(rows[t][k]!=candidate[k] for k in ('open','high','low','close','volume')):conflicts.add(t)
+            else:rows[t]=candidate
     # Latest bounded provider warm-up and current-session snapshots supersede
     # their explicit request windows. They are never blended with rolling options.
     clock=clock or datetime.now(timezone.utc)
@@ -88,7 +100,7 @@ def saved_candles(store,symbol,clock=None,record_limit=100):
             else:rows[t]=row
     return {'candles':[v for k,v in sorted(rows.items()) if k not in conflicts],
             'conflicting_minutes':len(conflicts),'invalid_record_ids':invalid,'source_record_ids':sources,
-            'read_scope':f'Latest {record_limit} retained dhan_history records plus bounded provider warm-up/current-session documents; collection archives are separate',
+            'read_scope':f'Latest {record_limit} retained dhan_history records, up to 21 indexed collection day partitions, plus bounded provider warm-up/current-session documents; full archive coverage is separate',
             'calendar':'Weekday regular-session filter only; holidays/special sessions not certified'}
 
 def aggregate(candles,minutes,clock):
@@ -439,7 +451,8 @@ def workspace(store,symbol,clock=None,options=None,contract_id=''):
     candles=loaded['candles'];latest=candles[-1] if candles else None
     records=store.rows('dhan_chain',40)
     chosen=next((r for r in records if r['data'].get('metadata',{}).get('index')==symbol),None)
-    chain=chain_analysis(chosen['data'] if chosen else None,clock,options)
+    from research_archive import chain_record
+    chain=chain_analysis(chain_record(store,symbol,clock,chosen['data'] if chosen else None),clock,options)
     contract=next((c for c in chain['contracts'] if c['security_id']==contract_id),None)
     session_rows={}
     for row in candles:
