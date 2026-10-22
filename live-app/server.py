@@ -42,6 +42,12 @@ class LiveInput(Model):
     symbol: Literal['nifty','banknifty']
     contract_id: str = Field(default='',max_length=40,pattern=r'^[0-9]*$')
 
+class DoctorInput(Model):
+    repair: bool = False
+
+class DoctorCursor(Model):
+    after: str = Field(default='',max_length=240)
+
 class DhanHistoryInput(Model):
     kind: str
     index: str
@@ -65,7 +71,7 @@ def create_app(db_path=None):
         store=CloudStore(bucket)
     else:store=Store(db_path or os.environ.get('THETA_DB_PATH',str(ROOT/'data/theta.sqlite3')))
     credential_source=DhanCredentials()
-    provider=Dhan(credentials=credential_source)
+    provider=Dhan(credentials=credential_source,store=store)
     board=MarketBoard(provider,store)
     app=FastAPI(title='Theta Plus Data Foundation',version=VERSION,docs_url=None,redoc_url=None,openapi_url=None)
     app.state.store=store
@@ -215,6 +221,9 @@ def create_app(db_path=None):
     @app.post('/api/collection/jobs/{jid}/{action}')
     def collection_control(jid:str,action:str,request:Request):
         require_admin(request)
+        from data_system import enabled
+        if action=='resume' and enabled(store) and set(collector.get_job(jid)['config']['families'])<=set(('live','depth20','depth200')):
+            raise HTTPException(409,'Pause continuous recording before starting socket samples; the recorder owns the feed connections')
         result=collector.control(jid,action)
         if action=='resume' and result['state']=='running' and os.environ.get('THETA_COLLECTION_WORKER'):
             result['runner']=launch_worker(store)
@@ -223,6 +232,93 @@ def create_app(db_path=None):
     @app.get('/api/collection/engine')
     def collection_engine():
         return {'sdk':provider.capabilities(),'worker':worker_status(store)}
+
+    @app.get('/api/data-system')
+    def data_system_status():
+        from data_system import status
+        return status(store)
+
+    @app.post('/api/system-doctor/status')
+    def system_doctor_status(request:Request):
+        require_admin(request)
+        from system_doctor import report
+        return report(store)
+
+    @app.post('/api/system-doctor/findings')
+    def system_doctor_findings(payload:DoctorCursor,request:Request):
+        require_admin(request)
+        from system_doctor import finding_pages
+        return finding_pages(store,payload.after)
+
+    @app.post('/api/system-doctor/start')
+    async def system_doctor_start(payload:DoctorInput,request:Request):
+        require_admin(request)
+        if not os.environ.get('THETA_COLLECTION_WORKER'):
+            raise HTTPException(503,'Configure the durable worker before starting a full scan')
+        from system_doctor import start,pending,app_inventory,application_probes,report
+        if await asyncio.to_thread(pending,store):raise HTTPException(409,'A scan is already pending; refresh its progress')
+        probes=await application_probes(app)
+        await asyncio.to_thread(start,store,payload.repair,app_inventory(app),probes)
+        try:runner=await asyncio.to_thread(launch_worker,store)
+        except HTTPException:
+            runner={'state':'DISPATCH_PENDING','note':'Scan retained; existing private watchdog can dispatch it. Check worker permissions if it stays queued.'}
+        return {**await asyncio.to_thread(report,store),'runner':runner}
+
+    @app.post('/api/system-doctor/stop')
+    def system_doctor_stop(request:Request):
+        require_admin(request)
+        from system_doctor import KEY,report
+        from collection import replace
+        replace(store,KEY,lambda old:{**(old or {}),'state':'STOPPED','stopped_at':datetime.now(timezone.utc).isoformat()})
+        return report(store)
+
+    @app.post('/api/data-system/start')
+    def data_system_start(request:Request):
+        require_admin(request)
+        if not os.environ.get('THETA_COLLECTION_WORKER'):raise HTTPException(503,'Configure the durable worker and watchdog before enabling the data system')
+        from data_system import start
+        state=start(collector)
+        return {'enabled':state['enabled'],'runner':launch_worker(store)}
+
+    @app.post('/api/data-system/pause')
+    def data_system_pause(request:Request):
+        require_admin(request)
+        from collection import replace
+        replace(store,'control/data-system',lambda old:{**(old or {}),'enabled':False})
+        return {'enabled':False,'message':'Continuous recording and automatic schedules paused; historical jobs retain their separate controls.'}
+
+    @app.get('/api/data-system/gaps')
+    def data_system_gaps():return store.rows('ingestion_gap',100)
+
+    @app.post('/api/data-system/watchdog')
+    def data_system_watchdog(payload:dict,request:Request):
+        require_admin(request)
+        if payload.get('worker')!=os.environ.get('THETA_COLLECTION_WORKER') or payload.get('schedule')!='*/5 * * * *':
+            raise HTTPException(422,'Watchdog does not match the configured private worker')
+        from collection import replace
+        return replace(store,'control/data-watchdog',lambda _:{'reported_configured':True,'verified':False,
+                       'schedule':payload['schedule'],'worker':payload['worker'],
+                       'note':'Deployment reported scheduler configured. Restart dispatch still requires a live acceptance test.'})
+
+    @app.get('/api/data-system/subscriptions')
+    def data_system_subscriptions():return store.document('system/subscription-plan')[0] or {}
+
+    @app.get('/api/data-system/latest/{family}')
+    def data_system_latest(family:str):
+        if family not in ('live','live-extra','depth20','depth200'):raise HTTPException(422,'Unknown feed family')
+        return store.document('system/latest/'+family)[0] or {}
+
+    @app.get('/api/collection/recovery')
+    def collection_recovery_status():
+        return store.document('control/gap-recovery')[0] or {'enabled':False}
+
+    @app.post('/api/collection/recovery/start')
+    def collection_recovery_start(request:Request):
+        require_admin(request)
+        from collection import replace
+        result=replace(store,'control/gap-recovery',lambda old:{**(old or {}),'enabled':True,'next_scan_at':0})
+        if os.environ.get('THETA_COLLECTION_WORKER'):launch_worker(store)
+        return result
 
     @app.get('/api/collection/jobs/{jid}/results')
     def collection_results(jid:str,after:str=''):
@@ -238,7 +334,7 @@ def create_app(db_path=None):
     @app.get('/api/collection/export/{key:path}')
     def collection_export(key:str):
         import re
-        if not re.fullmatch(r'(responses/[a-f0-9]{64}|candles/[a-f0-9]{64}/[0-9]{4}-[0-9]{2}-[0-9]{2})',key):
+        if not re.fullmatch(r'((responses|quarantine)/[a-f0-9]{64}|candles/[a-f0-9]{64}/[0-9]{4}-[0-9]{2}-[0-9]{2}|streams/[0-9]{4}-[0-9]{2}-[0-9]{2}/(live|live-extra|depth20|depth200)/[a-f0-9]{32}/[0-9]{8})',key):
             raise HTTPException(422,'Invalid export key')
         result=store.document(key)[0]
         if result is None:raise HTTPException(404,'Data not found')
@@ -335,7 +431,12 @@ def create_app(db_path=None):
         except CredentialError as exc:raise HTTPException(503,str(exc)) from None
         result['checked_at']=datetime.now(timezone.utc).isoformat()
         store.add('credential_status',result)
-        return {'saved':True,**result}
+        from data_system import credentials_saved
+        recovery=await asyncio.to_thread(credentials_saved,collector)
+        if recovery['enabled'] and os.environ.get('THETA_COLLECTION_WORKER'):
+            try:recovery['runner']=await asyncio.to_thread(launch_worker,store)
+            except HTTPException:recovery['worker_warning']='Credentials saved; worker dispatch pending. Check automatic data system / watchdog.'
+        return {'saved':True,'data_system':recovery,**result}
 
     @app.post('/api/dhan/token')
     async def rotate_dhan_token(payload:DhanTokenInput,request:Request):
@@ -346,7 +447,12 @@ def create_app(db_path=None):
         except CredentialError as exc:raise HTTPException(503,str(exc)) from None
         result['checked_at']=datetime.now(timezone.utc).isoformat()
         store.add('credential_status',result)
-        return {'updated':True,'message':'Token checked and saved. Market data must be verified separately.',**result}
+        from data_system import credentials_saved
+        recovery=await asyncio.to_thread(credentials_saved,collector)
+        if recovery['enabled'] and os.environ.get('THETA_COLLECTION_WORKER'):
+            try:recovery['runner']=await asyncio.to_thread(launch_worker,store)
+            except HTTPException:recovery['worker_warning']='Credentials saved; worker dispatch pending. Check automatic data system / watchdog.'
+        return {'updated':True,'message':'Token checked and saved. Market data must be verified separately.','data_system':recovery,**result}
 
     @app.post('/api/research/audit')
     async def audit_route(payload:AuditInput):

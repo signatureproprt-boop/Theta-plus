@@ -26,14 +26,8 @@ LOG.handlers=[logging.NullHandler()];LOG.propagate=False;LOG.disabled=True
 def now():return datetime.now(timezone.utc)
 
 def split_packets(frame):
-    if not isinstance(frame,bytes):raise ValueError('Binary feed required')
-    position=0
-    while position<len(frame):
-        if len(frame)-position<8:raise ValueError('Truncated feed header')
-        size=int.from_bytes(frame[position+1:position+3],'little')
-        if size<8 or position+size>len(frame):raise ValueError('Invalid feed length')
-        yield frame[position:position+size]
-        position+=size
+    from sdk_feeds import split_live_packets
+    yield from split_live_packets(frame)
 
 def observation(codec,packet,instruments,received):
     code=packet[0]

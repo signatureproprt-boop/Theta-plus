@@ -74,9 +74,23 @@ def sdk_request(client,path,body):
     raise ProviderError('Only Dhan market-data methods are enabled',code='ENDPOINT')
 
 class Dhan:
-    def __init__(self,credentials=None):
+    def __init__(self,credentials=None,store=None):
         self.lock=asyncio.Lock();self.last=0.
         self.credentials=credentials or DhanCredentials()
+        self.store=store
+
+    def reserve(self):
+        from collection import replace
+        from datetime import datetime
+        from runtime import IST
+        reservation={};today=datetime.now(IST).date().isoformat()
+        def change(old):
+            old=old or {};calls=old.get('calls',0) if old.get('day')==today else 0
+            if calls>=100000:raise ProviderError('Daily market-data request budget reached',code='BUDGET',status=429)
+            at=max(time.time(),old.get('next_at',0));reservation['at']=at
+            return {'day':today,'calls':calls+1,'next_at':at+3.2}
+        replace(self.store,'control/provider-budget',change)
+        return reservation['at']
 
     @property
     def configured(self):return self.credentials.configured
@@ -126,8 +140,11 @@ class Dhan:
 
     async def post(self,path,body):
         if path not in DATA_PATHS:raise ProviderError('Only Dhan market-data methods are enabled',code='ENDPOINT')
-        if not self.configured:raise ProviderError('Dhan credentials are not configured on the server',code='DH-901',status=401)
+        if not await asyncio.to_thread(lambda:self.configured):raise ProviderError('Dhan credentials are not configured on the server',code='DH-901',status=401)
         async with self.lock:
+            if self.store:
+                at=await asyncio.to_thread(self.reserve)
+                await asyncio.sleep(max(0,at-time.time()))
             wait=3.1-(time.monotonic()-self.last)
             if wait>0:await asyncio.sleep(wait)
             self.last=time.monotonic()

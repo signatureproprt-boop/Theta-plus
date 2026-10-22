@@ -14,6 +14,9 @@ class DhanCredentials:
         self._pair=None
         self._pair_until=0
 
+    def invalidate(self):
+        self._until=0;self._pair_until=0
+
     @property
     def pair_secret(self):return os.environ.get('THETA_DHAN_CREDENTIALS_SECRET','').strip().rstrip('/')
 

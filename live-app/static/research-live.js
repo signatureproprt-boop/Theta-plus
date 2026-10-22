@@ -7,7 +7,7 @@
   function text(message){state=message;if(node('research-live-state'))node('research-live-state').textContent=message;}
   function currentTrade(r){const at=Date.parse(r.trade_at);const age=Date.now()-at;const receiptAge=Date.now()-Date.parse(r.received_at);return active&&connected&&Number.isFinite(at)&&age>=0&&age<=10000&&receiptAge>=0&&receiptAge<=10000&&r.trade_state==='RECENT_TRADE';}
   function render(){
-    window.thetaResearchLiveState?.();if(!node('research-live-prices'))return;
+    window.thetaResearchLiveState?.();window.thetaMarketLiveState?.();if(!node('research-live-prices'))return;
     node('research-live-state').textContent=state;
     node('research-live-start').disabled=active;node('research-live-stop').disabled=!active;
     const main=[...rows.values()].filter(r=>r.role!=='option');
@@ -46,6 +46,7 @@
       }
     }
     window.thetaResearchLiveBatch?.(data.ticks||[]);
+    window.thetaMarketLiveBatch?.(data.ticks||[]);
     if((data.ticks||[]).length){retries=0;text('Connected · received '+new Date(data.received_at).toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata'})+' IST');}
     else if(!rows.size)text('Connected · awaiting market ticks');
     render();

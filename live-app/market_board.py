@@ -29,7 +29,15 @@ WATCH=[
 EXTERNAL=[('nikkei','Nikkei 225','Asia'),('hang_seng','Hang Seng','Asia'),
  ('shanghai','Shanghai Composite','Asia'),('kospi','KOSPI','Asia'),
  ('sp500','S&P 500','US'),('nasdaq','Nasdaq Composite','US'),
- ('dollar_index','Dollar index','Currency')]
+ ('dollar_index','Dollar index','Currency'),
+ ('sp500_future','S&P 500 futures','Global Futures'),
+ ('nasdaq_future','Nasdaq 100 futures','Global Futures'),
+ ('dow_future','Dow futures','Global Futures'),
+ ('nikkei_future','Nikkei 225 futures','Global Futures'),
+ ('gold_usd','Gold futures · USD','USD Commodities'),
+ ('silver_usd','Silver futures · USD','USD Commodities'),
+ ('wti_usd','WTI Crude · USD','USD Commodities'),
+ ('brent_usd','Brent Crude · USD','USD Commodities')]
 
 def parse_master(text,today):
     reader=csv.DictReader(io.StringIO(text.lstrip('\ufeff')))
@@ -60,6 +68,7 @@ def parse_master(text,today):
             if not segment:continue
             item={'key':key,'label':label,'group':group,'security_id':sid,'segment':segment,
                   'expiry':expiry.isoformat() if expiry else None,'instrument':inst,
+                  'currency':None if inst=='INDEX' else 'INR',
                   'unit':'index points' if inst=='INDEX' else 'INR futures quote'}
             # Front expiry, exact standard-size product. Never a continuous spot series.
             if key not in chosen or (item['expiry'] or '',sid)<(chosen[key]['expiry'] or '',chosen[key]['security_id']):chosen[key]=item
@@ -89,6 +98,7 @@ def quote_row(instrument,quote,now):
     return {**instrument,'source':'DhanHQ','price':price if valid else None,
         'change':change if valid else None,
         'change_pct':100*change/previous if previous and previous>0 and change is not None else None,
+        'previous_close':previous if previous and previous>0 else None,
         'fetched_at':now.isoformat(),'quote_at':at.isoformat() if at else None,
         'status':'NO_QUOTE' if not valid else 'TIME_UNAVAILABLE' if not at else 'RECENT_TRADE' if (now-at).total_seconds()<=60 else 'STALE',
         'time_basis':'last trade time; not an exchange quote timestamp',
@@ -122,16 +132,16 @@ class MarketBoard:
         self.master_at=time.monotonic();self.master_day=today;self.catalog_error=None
 
     async def refresh(self):
-        if not self.provider.configured:raise ProviderError('Dhan credentials are not configured')
+        if not await asyncio.to_thread(lambda:self.provider.configured):raise ProviderError('Dhan credentials are not configured')
         async with self.lock:
-            if time.monotonic()-self.attempt_at<30:return self.view()
+            if time.monotonic()-self.attempt_at<30:return await asyncio.to_thread(self.view)
             self.attempt_at=time.monotonic()
             try:await self.catalog()
             except Exception:
                 self.catalog_error='Instrument master unavailable; catalog was not refreshed'
                 if not self.instruments:
                     self.error=self.catalog_error
-                    return self.view()
+                    return await asyncio.to_thread(self.view)
             items=[];errors=[]
             # Isolate segments: an MCX entitlement failure must not hide index data.
             for segment in sorted({i['segment'] for i in self.instruments.values()}):
@@ -142,14 +152,33 @@ class MarketBoard:
                     quotes=result.get('data',{}).get(segment,{})
                     if not isinstance(quotes,dict):raise ProviderError('Invalid quote response')
                     now=datetime.now(timezone.utc)
-                    items.extend(quote_row(i,quotes.get(i['security_id'],{}),now) for i in instruments)
+                    rows=[quote_row(i,quotes.get(i['security_id'],{}),now) for i in instruments]
+                    # Some catalogued indices have no depth quote. One exact-ID
+                    # ticker fallback may supply LTP, but never a quote timestamp.
+                    gift=next((r for r in rows if r['key']=='gift_nifty' and r['price'] is None),None)
+                    if gift:
+                        gift['attempted_endpoints']=['marketfeed/quote','marketfeed/ltp']
+                        try:
+                            ticker=await self.provider.post('marketfeed/ltp',{segment:[int(gift['security_id'])]})
+                            entry=ticker.get('data',{}).get(segment,{}).get(gift['security_id'],{})
+                            value=number(entry.get('last_price')) if isinstance(entry,dict) else None
+                            if value is not None and value>0:
+                                gift.update(price=value,change=None,change_pct=None,quote_at=None,
+                                            fetched_at=datetime.now(timezone.utc).isoformat(),
+                                            status='TIME_UNAVAILABLE',quote_endpoint='marketfeed/ltp',
+                                            note='Dhan ticker LTP; exchange quote/trade time unavailable. Not certified live.')
+                            else:
+                                gift['note']='Exact master ID resolved; Dhan quote and ticker returned no positive price.'
+                        except (ProviderError,ValueError,TypeError,AttributeError):
+                            gift['note']='Depth quote has no price; ticker fallback failed. Provider availability remains unverified.'
+                    items.extend(rows)
                 except (ProviderError,ValueError,TypeError):
                     errors.append(segment)
                     items.extend({**i,'price':None,'status':'FETCH_FAILED','source':'DhanHQ','note':'Check data entitlement, token and provider response'} for i in instruments)
             self.error=('Quote fetch failed: '+', '.join(errors)) if errors else None
-            self.store.add('market_board',{'items':items,'catalog_at':datetime.now(timezone.utc).isoformat(),
+            await asyncio.to_thread(self.store.add,'market_board',{'items':items,'catalog_at':datetime.now(timezone.utc).isoformat(),
                 'error':self.error,'catalog_error':self.catalog_error})
-            return self.view()
+            return await asyncio.to_thread(self.view)
 
     def view(self):
         batches=self.store.rows('market_board',1)
@@ -162,6 +191,8 @@ class MarketBoard:
         items=[by_key.get(k,{'key':k,'label':label,'group':group,'price':None,'source':'DhanHQ',
             'status':'NOT_IN_CATALOG' if saved else 'NOT_FETCHED','note':'No current matching instrument resolved' if saved else 'Refresh market toolbar to resolve instruments'}) for k,label,group,*_ in WATCH]
         items.extend({'key':k,'label':label,'group':group,'price':None,'source':None,
-            'status':'SEPARATE_FEED_REQUIRED','note':'Not present in the verified Dhan index catalog; a separate authorised feed is required'} for k,label,group in EXTERNAL)
+            'status':'SEPARATE_FEED_REQUIRED','currency':'USD' if group=='USD Commodities' else None,
+            'unit':{'gold_usd':'USD / troy oz','silver_usd':'USD / troy oz','wti_usd':'USD / barrel','brent_usd':'USD / barrel'}.get(k,'Contract feed required'),
+            'note':'Separate authorised feed and exact contract/expiry required; MCX INR quotes are not USD futures prices'} for k,label,group in EXTERNAL)
         return {'items':items,'error':self.error or saved.get('error'),'catalog_error':self.catalog_error or saved.get('catalog_error'),
             'fetched_at':batches[0]['created_at'] if batches else None,'used_in_signal':False}

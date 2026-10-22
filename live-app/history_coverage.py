@@ -5,6 +5,7 @@ import hashlib
 import json
 from provider import ProviderError
 from runtime import IST
+from data_calendar import session
 from dhan_data import candle_count, option_count
 
 
@@ -31,7 +32,7 @@ def coverage_report(store,start,end,include_rows=False):
             at=datetime.fromtimestamp(stamp,timezone.utc).astimezone(IST)
             if not start<=at.date()<end:continue
             group['source_record_ids'].add(saved['id'])
-            if not '09:15'<=at.strftime('%H:%M')<'15:30':group['off_session'].add(int(stamp));continue
+            if session(at.date())['state']=='CLOSED' or not '09:15'<=at.strftime('%H:%M')<'15:30':group['off_session'].add(int(stamp));continue
             values={k:v[i] for k,v in row.items() if isinstance(v,list) and len(v)==len(row['timestamp'])}
             identity_key=str(int(stamp))+(':'+str(float(values['strike'])) if kind=='expired_option' else '')
             old=group['candles'].get(identity_key)
@@ -39,9 +40,9 @@ def coverage_report(store,start,end,include_rows=False):
                 group['overlap_rows']+=1
                 if old!=values:group['conflicts'].add(identity_key)
             else:group['candles'][identity_key]=values
-    weekdays=[];day=start
+    days=[];day=start
     while day<end:
-        if day.weekday()<5:weekdays.append(day)
+        days.append(day)
         day+=timedelta(days=1)
     results=[]
     for group in groups.values():
@@ -55,10 +56,15 @@ def coverage_report(store,start,end,include_rows=False):
         for v in values:by_minute[int(v['timestamp'])].add(v.get('strike'))
         ambiguous=sum(len(strikes)>1 for strikes in by_minute.values())
         sessions=[]
-        for day in weekdays:
+        for day in days:
+            calendar=session(day)
+            if calendar['state']=='CLOSED':continue
+            if calendar['state']!='REGULAR':
+                sessions.append({'date':day.isoformat(),'minutes':len(stamps[day]),'missing':None,'expected_minutes':None,'calendar_state':calendar['state']})
+                continue
             expected={(datetime(2000,1,1,9,15)+timedelta(minutes=i)).strftime('%H:%M') for i in range(375)}
             missing=sorted(expected-stamps[day])
-            sessions.append({'date':day.isoformat(),'minutes':len(stamps[day]),'missing':len(missing),'missing_ist':missing[:20]})
+            sessions.append({'date':day.isoformat(),'minutes':len(stamps[day]),'missing':len(missing),'missing_ist':missing[:20],'expected_minutes':375,'calendar_state':calendar['state']})
         result={k:v for k,v in group.items() if k not in ('candles','conflicts','source_record_ids','off_session')}
         result.update(rows=len(values),source_record_ids=sorted(group['source_record_ids']),conflicting_rows=len(group['conflicts']),
                       off_session_rows_excluded=len(group['off_session']),sessions=sessions,
@@ -67,6 +73,7 @@ def coverage_report(store,start,end,include_rows=False):
         if include_rows:result['candles']=values
         results.append(result)
     return {'from':start.isoformat(),'to_exclusive':end.isoformat(),'groups':sorted(results,key=lambda g:(g['kind'],g['index'],g['side'] or '')),
-            'invalid_records':invalid,'calendar_validation':'Weekday grid only; exchange holidays and special sessions need separate validation.',
+            'invalid_records':invalid,'calendar_validation':'Documented NSE 2026 regular sessions; other years and special-session times remain unverified.',
+            'source_records_inspected_limit':500,
             'provenance':'Raw records retained. Overlaps deduplicated; conflicting rows excluded. No missing candles filled.',
             'options':'ATM-relative strikes can change. Exact contract expiry and historical bid/ask are not established.'}

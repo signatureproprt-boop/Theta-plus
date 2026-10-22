@@ -12,6 +12,7 @@ import hashlib
 import io
 import json
 import math
+import struct
 import time
 import uuid
 import tempfile
@@ -42,6 +43,12 @@ SHARD_SIZE = 1000
 def now():
     return datetime.now(timezone.utc).isoformat()
 
+def float32_same_price(a,b):
+    """Reconcile representation noise only, bounded below half a paisa."""
+    if abs(a-b)>0.005:return False
+    try:return struct.pack('!f',a)==struct.pack('!f',b)
+    except (OverflowError,struct.error):return False
+
 def contract_expiry(item):
     # Master files use placeholder dates even for instruments that never expire.
     # Apply this when reading existing immutable catalogue pages as well as imports.
@@ -65,6 +72,8 @@ class CollectionPlan(Model):
     start: date
     end: date
     continue_rejected_requests: bool = False
+    quarantine_invalid_candles: bool = False
+    rolling_atm_baseline: bool = False
     families: list[Literal['daily','intraday','rolling','chain','quotes','live','depth20','depth200']] = Field(default_factory=lambda:list(FAMILIES),min_length=1,max_length=8)
     intervals: list[Literal[1,5,15,25,60]] = Field(default_factory=lambda:[1],min_length=1,max_length=5)
     segments: list[str] = Field(default_factory=list,max_length=8)
@@ -250,7 +259,11 @@ class Collector:
         job['pages']=new;job['cursor']={'page':start,'item':0,'variant':0,'window':0}
         job['chain_planner_version']=2;job['chain_discovery']=planned['discovery']
 
-    def create(self,plan):
+    def create(self,plan,job_id=None):
+        if job_id:
+            if len(job_id)!=32 or any(c not in '0123456789abcdef' for c in job_id):raise ValueError('Invalid internal job identity')
+            existing=self.store.document('jobs/'+job_id)[0]
+            if existing:return self.summary(existing)
         cat=self.catalogue()
         if not cat:raise HTTPException(409,'Refresh instrument catalogue first')
         config=plan.model_dump(mode='json')
@@ -265,12 +278,12 @@ class Collector:
                 if (family=='rolling')!=rolling:continue
                 if config['segments'] and not rolling and not any(p['group'].startswith(segment+'-') for segment in config['segments']):continue
                 pages.append({**p,'family':family})
-        job={'id':uuid.uuid4().hex,'created_at':now(),'updated_at':now(),'state':'paused',
+        job={'id':job_id or uuid.uuid4().hex,'created_at':now(),'updated_at':now(),'state':'paused',
              'catalogue_sha256':cat['sha256'],'catalogue_rows':cat['rows'],'config':config,
              'pages':pages,'cursor':{'page':0,'item':0,'variant':0,'window':0},
              'counts':{s:0 for s in TERMINAL},'rows_saved':0,'items_assessed':0,
              'provider_calls':0,'message':'Ready. Resume to collect. Runs while this page is open or a runner calls run.',
-             'retries':0,'chain_planner_version':2}
+             'retries':0,'chain_planner_version':2,'rolling_contract_version':2,'rolling_identity_version':2}
         if 'chain' in config['families']:job['chain_discovery']=self.chain_pages(cat)['discovery']
         self.store.put_document('jobs/'+job['id'],job,0)
         return self.summary(job)
@@ -321,10 +334,13 @@ class Collector:
     def control(self,jid,action):
         self.get_job(jid)
         def change(job):
-            if action=='pause':job['state']='paused'
+            if action=='pause':
+                job['state']='paused'
+                if job.get('system_role'):job['system_user_paused']=True
             elif action=='resume':
                 if job['state']=='completed':return job
                 job['state']='running';job['message']='Running in bounded requests'
+                job.pop('system_user_paused',None)
             elif action=='continue-rejected':
                 if job['state']!='request_review' or not job.get('current'):
                     raise HTTPException(409,'No rejected work item awaiting review')
@@ -374,11 +390,18 @@ class Collector:
     def variants(self,family,item,job):
         cfg=job['config']
         if family=='rolling':
+            if cfg.get('rolling_atm_baseline'):
+                return [{'expiryFlag':'MONTH','expiryCode':1,'strike':'ATM','drvOptionType':side,'interval':str(interval)}
+                        for side in ('CALL','PUT') for interval in cfg['intervals']]
             result=[]
-            flags=['WEEK','MONTH'] if item['instrument']=='OPTIDX' else (item.get('expiry_flags') or ['MONTH'])
+            flags=(['MONTH','WEEK'] if job.get('rolling_identity_version')==2 else ['WEEK','MONTH']) if item['instrument']=='OPTIDX' else (item.get('expiry_flags') or ['MONTH'])
             for flag in flags:
-                for code in (0,1,2):
-                    reach=10 if item['instrument']=='OPTIDX' and code==0 else 3
+                # Rolling options use 1/2/3, unlike the daily-history enum.
+                # Retain legacy variant positions until the run guard stops
+                # that job; never reinterpret an already saved cursor.
+                codes=(1,2,3) if job.get('rolling_contract_version')==2 else (0,1,2)
+                for code in codes:
+                    reach=10 if item['instrument']=='OPTIDX' and code==codes[0] else 3
                     for strike in ['ATM']+[f'ATM{n:+}' for n in range(-reach,reach+1) if n]:
                         for side in ('CALL','PUT'):
                             for interval in cfg['intervals']:
@@ -386,7 +409,27 @@ class Collector:
             return result
         return [{'interval':str(i)} for i in cfg['intervals']] if family=='intraday' else [{}]
 
+    def rolling_index_item(self,job,item):
+        if item['instrument']!='OPTIDX':return item
+        cat=self.store.document('catalogue/'+job['catalogue_sha256']+'/manifest')[0]
+        if not cat:
+            cat=self.catalogue()
+            if not cat or cat['sha256']!=job['catalogue_sha256']:
+                return {**item,'reason':'Pinned index master unavailable; rolling underlying identity unresolved'}
+        matches=[]
+        for page in cat['pages']:
+            if page['group']!='IDX_I-INDEX':continue
+            matches.extend(row for row in self.page_items(page['key'])
+                           if row['exchange']==item['exchange'] and row['symbol']==item['symbol']
+                           and not row.get('reason'))
+        if len(matches)!=1:
+            return {**item,'reason':'Rolling index underlying does not resolve uniquely in pinned Dhan index master'}
+        return {**item,'security_id':matches[0]['security_id'],
+                'source_underlying_id':item['security_id'],'rolling_identity_source':'PINNED_DHAN_INDEX_MASTER'}
+
     def task(self,job,family,item):
+        if family=='rolling' and job.get('rolling_identity_version')==2:
+            item=self.rolling_index_item(job,item)
         cursor=job['cursor'];variants=self.variants(family,item,job)
         if cursor['variant']>=len(variants):
             cursor.update(item=cursor['item']+1,variant=0,window=0)
@@ -591,7 +634,7 @@ class Collector:
                 'capture_truncated':truncated or len(frames)>=1000,
                 'freshness':'Receipt only; exchange timestamps not decoded. This is a bounded sample, not continuous recording.'}
 
-    def persist_candles(self,task,response):
+    def persist_candles(self,task,response,quarantine_invalid=False):
         raw=response['raw'];family=task['family'];item=task['item']
         row=(raw.get('data') or {}).get('ce' if task['variant']['drvOptionType']=='CALL' else 'pe') if family=='rolling' else raw
         if row is None:return {'rows':0,'duplicate_timestamps':0,'quality':'EMPTY'}
@@ -602,7 +645,7 @@ class Collector:
             raise ProviderError('Required historical arrays missing')
         n=len(row['timestamp'])
         if any(len(row[k])!=n for k in required):raise ProviderError('Historical arrays differ in length')
-        by_day={};duplicates=0;outside_range=0;observed=set()
+        by_day={};duplicates=0;outside_range=0;precision_rows=0;observed=set();quarantined=[]
         for i,stamp in enumerate(row['timestamp']):
             if isinstance(stamp,bool) or not isinstance(stamp,(int,float)) or not math.isfinite(stamp):
                 raise ProviderError('Invalid historical timestamp')
@@ -617,10 +660,23 @@ class Collector:
             candle={k:row[k][i] for k in required}
             if any(isinstance(candle[k],bool) or not isinstance(candle[k],(int,float)) or not math.isfinite(candle[k]) for k in required):
                 raise ProviderError('Non-numeric historical value')
+            # Keep raw provider arrays unchanged. Bounds may mix decimal and
+            # float32 encodings of the same price; larger inconsistencies fail.
+            adjusted=False
+            upper=max(candle['open'],candle['close'],candle['low'])
+            lower=min(candle['open'],candle['close'])
+            if candle['high']<upper and float32_same_price(candle['high'],upper):
+                candle['high']=upper;adjusted=True
+            if candle['low']>lower and float32_same_price(candle['low'],lower):
+                candle['low']=lower;adjusted=True
             if (min(candle[k] for k in ('open','high','low','close'))<0 or candle['volume']<0 or
                 candle['high']<max(candle['open'],candle['close'],candle['low']) or
-                candle['low']>min(candle['open'],candle['close'])):raise ProviderError('Invalid OHLC or volume')
+                candle['low']>min(candle['open'],candle['close'])):
+                if not quarantine_invalid:raise ProviderError('Invalid OHLC or volume')
+                quarantined.append({'row_index':i,'timestamp':stamp,'reason':'Invalid OHLC or volume'})
+                continue
             if any(candle.get(k,0)<0 for k in ('open_interest','oi','iv','spot','strike')):raise ProviderError('Negative derivative data')
+            precision_rows+=int(adjusted)
             key=str(int(stamp))+(':'+str(float(candle['strike'])) if family=='rolling' else '')
             if key in observed:duplicates+=1
             observed.add(key)
@@ -635,16 +691,24 @@ class Collector:
                         'calendar_check':'Pending exchange calendar; no gaps filled'}
             replace(self.store,'candles/'+series+'/'+day,change)
         with ThreadPoolExecutor(max_workers=8) as pool:list(pool.map(merge,by_day.items()))
-        return {'rows':len(observed),'duplicate_timestamps':duplicates,'outside_requested_dates':outside_range,'quality':'ROWS_PRESENT' if observed else 'EMPTY',
+        quarantine_key=None
+        if quarantined:
+            quarantine_key='quarantine/'+digest([series,task['from'],task['to'],response.get('received_at'),quarantined])
+            install_once(self.store,quarantine_key,{'series':series,'from':task['from'],'to':task['to'],
+                         'received_at':response.get('received_at'),'excluded_rows':quarantined,
+                         'policy':'Raw arrays retained; invalid rows excluded, never filled or corrected.'})
+        return {'rows':len(observed),'duplicate_timestamps':duplicates,'outside_requested_dates':outside_range,'quality':'PARTIAL' if quarantined and observed else 'INVALID_ONLY' if quarantined else 'ROWS_PRESENT' if observed else 'EMPTY',
+                'quarantined_rows':len(quarantined),'quarantine_key':quarantine_key,
+                'precision_reconciled_rows':precision_rows,'precision_policy':'same_float32_within_0.005',
                 'session_validation':'Pending correct exchange calendar','days':len(by_day),'days_saved':sorted(by_day),'series':series,
-                'coverage':'ROWS_PRESENT_UNVERIFIED' if observed else 'EMPTY_RETURNED',
+                'coverage':'PARTIAL_INVALID_ROWS' if quarantined else 'ROWS_PRESENT_UNVERIFIED' if observed else 'EMPTY_RETURNED',
                 'requested_from':task['from'],'requested_to_exclusive':task['to'],
                 'first_returned_at':datetime.fromtimestamp(min(int(k.split(':')[0]) for k in observed),timezone.utc).isoformat() if observed else None,
                 'last_returned_at':datetime.fromtimestamp(max(int(k.split(':')[0]) for k in observed),timezone.utc).isoformat() if observed else None}
 
-    def persist_result(self,task,response):
+    def persist_result(self,task,response,quarantine_invalid=False):
         family=task['family']
-        if family in ('daily','intraday','rolling'):return self.persist_candles(task,response)
+        if family in ('daily','intraday','rolling'):return self.persist_candles(task,response,quarantine_invalid)
         if family=='chain':
             expiries=response['raw'].get('data',[])
             if any(not isinstance(e,str) for e in expiries):raise ProviderError('Invalid expiry date')
@@ -667,9 +731,12 @@ class Collector:
                     'review_required':len(valid)<len(expected),'reason':response.get('diagnosis') if not valid else None,
                     'freshness':'Inspect provider last_trade_time; receipt is not a live quote timestamp'}
         expected={i['security_id'] for i in task.get('batch',[task['item']])}
-        observed={o['security_id'] for f in response['raw']['frames'] for o in f.get('observations',[]) if o['security_id'] in expected}
-        matched=sum(any(o['security_id'] in expected for o in f.get('observations',[])) for f in response['raw']['frames'])
+        def decoded(o):return o['security_id'] in expected and isinstance(o.get('decoded'),dict) and bool(o['decoded'])
+        observed={o['security_id'] for f in response['raw']['frames'] for o in f.get('observations',[]) if decoded(o)}
+        matched=sum(any(decoded(o) for o in f.get('observations',[])) for f in response['raw']['frames'])
+        decode_failed=sum(o['security_id'] in expected and not decoded(o) for f in response['raw']['frames'] for o in f.get('observations',[]))
         return {'rows':matched,'quality':'ROWS_PRESENT' if matched else 'EMPTY','frames_received':len(response['raw']['frames']),
+                'decode_failed_observations':decode_failed,
                 'missing_security_ids':sorted(expected-observed),'continuous':False,'exchange_time_verified':False}
 
     async def run(self,jid):
@@ -694,6 +761,19 @@ class Collector:
             if not task:
                 await asyncio.to_thread(self.save_job,job)
                 return self.summary(job)
+            if task['family'] in ('live','depth20','depth200'):
+                system=(await asyncio.to_thread(self.store.document,'control/data-system'))[0] or {}
+                if system.get('enabled'):
+                    job.update(state='paused',message='Continuous recorder owns feed connections. Sample checkpoint retained.',current=task)
+                    await asyncio.to_thread(self.save_job,job)
+                    return self.summary(job)
+            if task['family']=='rolling' and (job.get('rolling_contract_version')!=2 or job.get('rolling_identity_version')!=2) and not job.get('retry_of'):
+                job['current']=task
+                job['state']='request_review'
+                job['message']='Legacy rolling expiry or underlying mapping stopped before a provider call. Create a new Expired options plan using codes 1/2/3 and pinned Dhan index identities. Original cursor, results and gaps are retained.'
+                job['updated_at']=now()
+                await asyncio.to_thread(self.save_job,job)
+                return self.summary(job)
             job['current']=task
             await asyncio.to_thread(self.save_job,job)
             key=digest({k:v for k,v in task.items() if k not in ('skip','horizon_gap')})
@@ -715,10 +795,14 @@ class Collector:
                                       'raw':await self.call(owner,'optionchain',body)}
                         else:response=await self.acquire_data(owner,task)
                         await asyncio.to_thread(install_once,self.store,raw_key,response)
-                    result=await asyncio.to_thread(self.persist_result,task,response)
+                    recovery_policy=(await asyncio.to_thread(self.store.document,'control/gap-recovery'))[0] or {}
+                    quarantine=job['config'].get('quarantine_invalid_candles',False) or recovery_policy.get('enabled',False)
+                    result=await asyncio.to_thread(self.persist_result,task,response,quarantine)
                     from research_archive import publish
                     await asyncio.to_thread(publish,self.store,task,response,result)
-                    result['status']='partial' if result['rows'] and result.get('missing_security_ids') else 'completed' if result['rows'] else 'empty'
+                    result['status']=('failed' if not result['rows'] and (result.get('quarantined_rows') or result.get('decode_failed_observations')) else
+                                      'partial' if result['rows'] and (result.get('missing_security_ids') or result.get('quarantined_rows') or result.get('decode_failed_observations')) else
+                                      'completed' if result['rows'] else 'empty')
                     result['raw_key']=raw_key
                 entry={'task':task,'result':result,'checked_at':now()}
                 await asyncio.to_thread(install_once,self.store,'results/'+jid+'/'+key,entry)
@@ -734,7 +818,8 @@ class Collector:
                 if job.get('chain_pending'):
                     job['current']={**job['chain_parent'],'family':'chain_snapshot','expiry':job['chain_pending'][0]}
                 else:job.pop('chain_parent',None)
-                job['message']='Saved work item. Empty and unsupported items remain visible.'
+                job['message']=('Valid rows saved; invalid candles quarantined. Historical coverage remains incomplete.'
+                                if result.get('quarantined_rows') else 'Saved work item. Empty and unsupported items remain visible.')
             except ProviderError as exc:
                 code=exc.code
                 job['message']=str(exc)
@@ -782,7 +867,10 @@ class Collector:
     def save_job(self,job):
         def save(old):
             # A pause from another request wins over the in-flight result.
-            if old and old['state']=='paused' and job['state']=='running':job['state']='paused'
+            if old and old['state']=='paused' and job['state']=='running':
+                job['state']='paused'
+                if old.get('system_user_paused'):job['system_user_paused']=True
+            if old and old.get('system_role'):job['system_role']=old['system_role']
             return job
         return replace(self.store,'jobs/'+job['id'],save)
 
@@ -794,21 +882,31 @@ class Collector:
         return {'items':[{'key':k,**self.store.document(k)[0]} for k in names[:50]],
                 'next_cursor':names[49] if len(names)>50 else None}
 
-    def retry(self,jid,key):
+    def retry(self,jid,key,quarantine_invalid=False,child_id=None):
         self.get_job(jid)
         if not key.startswith('results/'+jid+'/'):raise HTTPException(422,'Invalid result key')
         entry=self.store.document(key)[0]
         if not entry or entry['result']['status'] not in ('failed','partial','empty','permission_blocked'):
             raise HTTPException(422,'Choose a failed, partial or empty result')
+        if entry['task']['family']=='rolling' and entry['task']['variant'].get('expiryCode') not in (1,2,3):
+            raise HTTPException(422,'Invalid legacy rolling expiry code. Create a new Expired options plan; the original failure remains retained.')
         parent=self.get_job(jid)
-        child={**parent,'id':uuid.uuid4().hex,'pages':[],'cursor':{'page':0,'item':0,'variant':0,'window':0},
+        if entry['task']['family']=='rolling' and entry['task']['item']['instrument']=='OPTIDX' and parent.get('rolling_identity_version')!=2:
+            raise HTTPException(422,'Legacy rolling index identity requires a new Expired options plan; original results retained.')
+        if child_id:
+            existing=self.store.document('jobs/'+child_id)[0]
+            if existing:return self.summary(existing)
+        child={**parent,'id':child_id or uuid.uuid4().hex,'pages':[],'cursor':{'page':0,'item':0,'variant':0,'window':0},
             'created_at':now(),'updated_at':now(),'state':'paused','current':entry['task'],
             'counts':{s:0 for s in TERMINAL},'items_assessed':0,'rows_saved':0,'retries':0,
             'provider_calls':0,'message':'Retry ready. Resume to retry this result.','retry_of':key,'force_fetch':True}
         child.pop('retry_at',None)
-        if entry['task']['family']=='quotes' and entry['result'].get('missing_security_ids'):
+        child['config']={**parent['config']}
+        if quarantine_invalid:child['config']['quarantine_invalid_candles']=True
+        if entry['task']['family'] in ('quotes','live','depth20','depth200') and entry['result'].get('missing_security_ids'):
             missing=set(entry['result']['missing_security_ids'])
             task={**entry['task']};batch=[i for i in task.get('batch',[task['item']]) if i['security_id'] in missing]
+            if not batch:raise HTTPException(422,'Missing IDs do not match the retained subscription')
             task.update(item=batch[0],batch=batch,span=len(batch));child['current']=task
         if entry['task']['family']=='chain_snapshot':
             child['chain_parent']=entry['task'];child['chain_pending']=[entry['task']['expiry']]

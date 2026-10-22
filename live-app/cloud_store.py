@@ -48,6 +48,26 @@ class CloudStore:
         return [b.name[len(root):-5] for b in self.bucket.list_blobs(**args)
                 if b.name.endswith('.json') and b.name[len(root):-5]>after][:limit]
 
+    def diagnostic_names(self,namespace,after='',limit=25):
+        root={'documents':'collection/','records':'records/','journal':'journal/'}.get(namespace)
+        if root is None:raise ValueError('Unknown diagnostic namespace')
+        args={'prefix':root,'page_size':limit}
+        if after:args['start_offset']=root+after+'.json'
+        names=[]
+        # CSV sources do not end the JSON traversal or consume its page limit.
+        for blob in self.bucket.list_blobs(**args):
+            if blob.name.endswith('.json') and blob.name[len(root):-5]>after:
+                names.append(blob.name[len(root):-5])
+                if len(names)==limit:break
+        return names
+
+    def diagnostic_read(self,namespace,key):
+        if namespace=='documents':return self.document(key)[0]
+        root={'records':'records/','journal':'journal/'}.get(namespace)
+        if root is None:raise ValueError('Unknown diagnostic namespace')
+        result=self.read(root+key+'.json')
+        return {**result,'kind':key.split('/')[0]} if namespace=='records' else result
+
     def put_catalogue_source(self, sha, source):
         if len(sha)!=64 or any(c not in '0123456789abcdef' for c in sha):raise ValueError('Invalid checksum')
         try:

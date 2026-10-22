@@ -8,6 +8,10 @@ from fastapi import HTTPException
 from collection import Collector,replace,now
 from credentials import DhanCredentials
 from provider import Dhan
+from diagnostics import capture
+from google.api_core.exceptions import Aborted,DeadlineExceeded,ServiceUnavailable,TooManyRequests,InternalServerError
+
+class WorkerLeaseLost(RuntimeError):pass
 
 RESOURCE=re.compile(r'projects/[a-z0-9-]+/locations/[a-z0-9-]+/jobs/[a-z0-9-]+')
 
@@ -44,14 +48,25 @@ def launch_worker(store):
 
 
 def running_jobs(store):
-    cursor=''
-    while True:
-        names=store.document_names('jobs/',cursor,100)
-        for name in names:
-            job=store.document(name)[0]
-            if job and job.get('state')=='running':yield job['id']
-        if len(names)<100:return
-        cursor=names[-1]
+    from gap_recovery import all_jobs
+    jobs=[j for j in all_jobs(store) if j.get('state')=='running']
+    jobs.sort(key=lambda j:(0 if str(j.get('system_role') or '').startswith('core_') else 1,j['id']))
+    return iter(j['id'] for j in jobs)
+
+def pause_failed_job(store,jid,error):
+    record=capture(store,'collection_job',error,jid)
+    transient=isinstance(error,(TimeoutError,ConnectionError,Aborted,DeadlineExceeded,ServiceUnavailable,TooManyRequests,InternalServerError))
+    def pause(old):
+        if not isinstance(old,dict):return old
+        if transient:
+            return {**old,'retry_at':time.time()+60,'system_error':record,
+                    'message':'Temporary storage/transport failure. Same checkpoint retained; automatic retry after backoff. Diagnostic '+record['id']}
+        return {**old,'state':'paused','system_review_required':True,'system_error':record,
+                'message':'Internal collection error. Checkpoint retained; review diagnostic '+record['id']+'. Other data components continue.'}
+    try:replace(store,'jobs/'+jid,pause)
+    except Exception as storage_error:capture(store,'job_pause_storage',storage_error,jid)
+    return record
+
 
 async def run_worker(collector,max_seconds=23*3600):
     store=collector.store;owner=uuid.uuid4().hex;claimed=False
@@ -70,34 +85,90 @@ async def run_worker(collector,max_seconds=23*3600):
     started=time.monotonic()
     def heartbeat(state='running'):
         def touch(old):
-            if not old or old.get('owner')!=owner:raise RuntimeError('Worker lease lost')
+            if not old or old.get('owner')!=owner:raise WorkerLeaseLost('Worker lease lost')
             return {**old,'heartbeat':now(),'until':time.time()+600 if state=='running' else 0,'state':state}
         replace(store,'control/worker',touch)
     state='idle'
+    stop=asyncio.Event()
+    async def keep_lease():
+        while not stop.is_set():
+            await asyncio.to_thread(heartbeat)
+            try:await asyncio.wait_for(stop.wait(),30)
+            except asyncio.TimeoutError:pass
+    async def data_engine():
+        from data_system import enabled,supervise
+        while not stop.is_set():
+            try:
+                if await asyncio.to_thread(enabled,store):await supervise(collector,stop)
+            except asyncio.CancelledError:raise
+            except Exception as error:await asyncio.to_thread(capture,store,'data_engine',error)
+            try:await asyncio.wait_for(stop.wait(),5)
+            except asyncio.TimeoutError:pass
+    async def doctor_engine():
+        from system_doctor import tick
+        while not stop.is_set():
+            try:await asyncio.to_thread(tick,collector)
+            except asyncio.CancelledError:raise
+            except Exception as error:await asyncio.to_thread(capture,store,'system_doctor',error)
+            try:await asyncio.wait_for(stop.wait(),2)
+            except asyncio.TimeoutError:pass
+    lease_task=asyncio.create_task(keep_lease());engine_task=asyncio.create_task(data_engine());doctor_task=asyncio.create_task(doctor_engine())
+    next_scan=0;last_stage='worker_start'
     try:
         while time.monotonic()-started<max_seconds:
-            jobs=await asyncio.to_thread(lambda:list(running_jobs(store)))
-            if not jobs:break
+            if lease_task.done():lease_task.result()
+            from gap_recovery import tick
+            last_stage='worker_heartbeat'
+            await asyncio.to_thread(heartbeat)
+            recovery_pending=False
+            if time.monotonic()>=next_scan:
+                try:
+                    last_stage='gap_recovery'
+                    recovery_pending=await asyncio.to_thread(tick,collector)
+                except Exception as error:
+                    await asyncio.to_thread(capture,store,'gap_recovery',error)
+                    next_scan=time.monotonic()+60
+            try:
+                last_stage='job_listing'
+                jobs=await asyncio.to_thread(lambda:list(running_jobs(store)))
+            except Exception as error:
+                await asyncio.to_thread(capture,store,'job_listing',error)
+                await asyncio.sleep(5);continue
+            if not jobs:
+                if recovery_pending:continue
+                from data_system import enabled
+                from system_doctor import pending
+                if await asyncio.to_thread(lambda:enabled(store) or pending(store)):
+                    await asyncio.sleep(5);continue
+                break
             for jid in jobs:
                 if time.monotonic()-started>=max_seconds:break
                 await asyncio.to_thread(heartbeat)
                 try:
+                    last_stage='collection_job'
                     result=await collector.run(jid)
                     print('collection',jid,result['state'],result['items_assessed'],flush=True)
-                except HTTPException as exc:
-                    if exc.status_code not in (409,429):raise
+                except HTTPException as error:
+                    if error.status_code not in (409,429):
+                        await asyncio.to_thread(pause_failed_job,store,jid,error)
+                except Exception as error:
+                    await asyncio.to_thread(pause_failed_job,store,jid,error)
             await asyncio.sleep(3.5)
         else:state='checkpointed'
-    except Exception:
+    except Exception as error:
         state='interrupted'
-        # Do not log credentials, request payloads or credential-bearing URLs.
-        print('Worker interrupted; durable checkpoints retained.',flush=True)
-        raise RuntimeError('Collection worker interrupted') from None
+        record=await asyncio.to_thread(capture,store,last_stage,error)
+        raise RuntimeError('Collection worker interrupted; diagnostic '+record['id']) from None
     finally:
-        await asyncio.to_thread(heartbeat,state)
-        await asyncio.to_thread(replace,store,'control/dispatch',lambda _:None)
+        stop.set();engine_task.cancel();doctor_task.cancel()
+        await asyncio.gather(engine_task,lease_task,doctor_task,return_exceptions=True)
+        try:await asyncio.to_thread(heartbeat,state)
+        except WorkerLeaseLost as error:await asyncio.to_thread(capture,store,'worker_lease_lost',error)
+        else:await asyncio.to_thread(replace,store,'control/dispatch',lambda _:None)
     # Continue long backfills in a new bounded execution after releasing our lease.
-    if state in ('idle','checkpointed') and await asyncio.to_thread(lambda:bool(list(running_jobs(store)))):
+    from data_system import enabled
+    from system_doctor import pending
+    if state in ('idle','checkpointed') and await asyncio.to_thread(lambda:bool(list(running_jobs(store))) or enabled(store) or pending(store)):
         await asyncio.to_thread(launch_worker,store)
 
 
@@ -105,6 +176,7 @@ def main():
     bucket=os.environ.get('THETA_GCS_BUCKET')
     if not bucket:raise RuntimeError('Worker requires the existing durable GCS bucket')
     from cloud_store import CloudStore
-    asyncio.run(run_worker(Collector(Dhan(DhanCredentials()),CloudStore(bucket))))
+    store=CloudStore(bucket)
+    asyncio.run(run_worker(Collector(Dhan(DhanCredentials(),store=store),store)))
 
 if __name__=='__main__':main()
