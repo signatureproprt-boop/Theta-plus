@@ -6,8 +6,9 @@ EMA is SMA-seeded; RSI/DI/ADX use Wilder smoothing (14 changes, 27 for ADX).
 from datetime import datetime, timedelta
 from math import isfinite
 from runtime import IST
+from data_calendar import session
 
-VERSION = 'closed-candle-1.0'
+VERSION = 'closed-candle-1.1'
 PERIODS = (1, 5, 15, 60)
 
 
@@ -24,7 +25,7 @@ def normalized(candles, clock):
             excluded += 1; continue
         at = datetime.fromtimestamp(t, IST); offset = (at-origin(t)).total_seconds()/60
         values = [row.get(k) for k in ('open', 'high', 'low', 'close')]
-        if (at.weekday() > 4 or not 0 <= offset < 375
+        if (at.weekday() > 4 or session(at.date())['state']=='CLOSED' or not 0 <= offset < 375
                 or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not isfinite(v) or v <= 0 for v in values)
                 or row['low'] > min(row['open'], row['close'])
                 or row['high'] < max(row['open'], row['close']) or row['high'] < row['low']):
@@ -54,6 +55,13 @@ def grid(rows, minutes, clock):
 def consecutive(previous, current, minutes):
     if previous is None: return True
     if origin(previous) == origin(current): return current-previous == minutes*60
+    # Every intervening date must be a documented closed day. Missing an
+    # entire regular session must reset smoothing, just like a missing minute.
+    day=origin(previous).date()+timedelta(days=1)
+    while day<origin(current).date():
+        if session(day)['state']!='CLOSED':return False
+        day+=timedelta(days=1)
+    if session(origin(current).date())['state']!='REGULAR':return False
     # Carry overnight only from the final full bucket to the next session open.
     return (previous == int(origin(previous).timestamp()) + (375//minutes-1)*minutes*60
             and current == int(origin(current).timestamp()))
