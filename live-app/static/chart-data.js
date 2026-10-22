@@ -24,12 +24,6 @@
         bars.push({time,open:group[0].open,high:Math.max(...group.map(r=>r.high)),low:Math.min(...group.map(r=>r.low)),close:group.at(-1).close});
       }
     }
-    function ema(period){let sum=0,count=0,average=null;return bars.map(r=>{
-      if(r.close===undefined){sum=0;count=0;average=null;return {time:r.time};}
-      count++;if(count<=period)sum+=r.close;
-      if(count===period)average=sum/period;else if(count>period)average+=(r.close-average)*2/(period+1);
-      return average===null?{time:r.time}:{time:r.time,value:average};
-    });}
     const latestStart=days.at(-1),latest=latestStart===undefined?[]:[...rows.values()].filter(r=>startOfDay(r.timestamp)===latestStart);
     const levels=[];
     if(latest.length){
@@ -41,7 +35,7 @@
         {title:'ORB 15m high',price:Math.max(...opening.map(r=>r.high)),color:'#7755b5'},
         {title:'ORB 15m low',price:Math.min(...opening.map(r=>r.low)),color:'#7755b5'});
     }
-    return {bars,ema20:ema(20),ema50:ema(50),levels,excluded,conflicts:conflicts.size,
+    return {bars,ema20:[],ema50:[],levels,excluded,conflicts:conflicts.size,
       last:bars.findLast(r=>r.close!==undefined),loadedDay:latestStart===undefined?null:day(latestStart),
       loadedHigh:latest.length?Math.max(...latest.map(r=>r.high)):null,loadedLow:latest.length?Math.min(...latest.map(r=>r.low)):null};
   }

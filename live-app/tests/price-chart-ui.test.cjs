@@ -4,7 +4,7 @@ function env(){
   const root={classList:{toggle(){},remove(){}}};
   const node=id=>{if(!nodes.has(id))nodes.set(id,{id,textContent:'',setAttribute(){},closest:()=>root,click(){this.onclick?.();}});return nodes.get(id);};
   const L={ColorType:{Solid:'solid'},CrosshairMode:{Normal:0},TickMarkType:{Time:3,TimeWithSeconds:4},LineStyle:{Dashed:2},CandlestickSeries:'candles',LineSeries:'line',createChart:(element,options)=>{
-    let range=null;const c={element,options,series:[],removed:false,rangeCalls:0,applyOptions(){},remove(){this.removed=true;},subscribeCrosshairMove(fn){this.crosshair=fn;},timeScale:()=>({getVisibleLogicalRange:()=>range,setVisibleLogicalRange:r=>{range=r;c.rangeCalls++;}}),addSeries(type){const s={type,sets:[],lines:[],options:[],setData(rows){this.sets.push(rows);},applyOptions(o){this.options.push(o);},createPriceLine(o){const l={options:o,applyOptions(v){this.options={...this.options,...v};}};this.lines.push(l);return l;},removePriceLine(l){this.lines=this.lines.filter(x=>x!==l);}};this.series.push(s);return s;}};charts.push(c);return c;
+    let range=null;const c={element,options,series:[],removed:false,rangeCalls:0,applyOptions(){},remove(){this.removed=true;},subscribeCrosshairMove(fn){this.crosshair=fn;},timeScale:()=>({getVisibleLogicalRange:()=>range,setVisibleLogicalRange:r=>{range=r;c.rangeCalls++;}}),addSeries(type,initial,pane=0){const s={type,pane,initial,sets:[],lines:[],options:[],setData(rows){this.sets.push(rows);},applyOptions(o){this.options.push(o);},createPriceLine(o){const l={options:o,applyOptions(v){this.options={...this.options,...v};}};this.lines.push(l);return l;},removePriceLine(l){this.lines=this.lines.filter(x=>x!==l);}};this.series.push(s);return s;}};charts.push(c);return c;
   }};
   const document={getElementById:node,addEventListener:(n,fn)=>listeners.set(n,fn),removeEventListener:n=>listeners.delete(n)};
   const window={LightweightCharts:L,addEventListener(){},removeEventListener(){},thetaLiveIsConnected:()=>true};
@@ -51,3 +51,13 @@ test('an initial empty chart does not pin subsequently loaded history to its old
   e.window.thetaChartRender(e.node('research-chart'),{...e.model,bars,last:bars.at(-1)});
   assert.equal(e.charts[1].timeScale().getVisibleLogicalRange().from,114);
 });
+
+ test('RSI and ADX have independent panes fed only by the authoritative backend arrays',()=>{
+  const e=env(),time=e.model.last.time;
+  const rsi14=[{time,value:60}],adx14=[{time,value:28}];
+  e.window.thetaChartRender(e.node('research-chart'),{...e.model,rsi14,adx14});
+  const c=e.charts[0];assert.equal(c.series[3].pane,1);assert.equal(c.series[4].pane,2);
+  assert.equal(c.series[3].sets[0],rsi14);assert.equal(c.series[4].sets[0],adx14);
+  c.crosshair({seriesData:new Map([[c.series[0],e.model.last],[c.series[3],{value:60}],[c.series[4],{value:28}]])});
+  assert.match(e.node('research-chart-readout').textContent,/RSI14 60.00 · ADX14 28.00/);
+ });

@@ -29,16 +29,20 @@
       const candles=chart.addSeries(L.CandlestickSeries,{upColor:'#148570',downColor:'#ce5969',borderVisible:false,wickUpColor:'#148570',wickDownColor:'#ce5969',priceLineVisible:false});
       const ema20=chart.addSeries(L.LineSeries,{color:'#3d81d4',lineWidth:1,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
       const ema50=chart.addSeries(L.LineSeries,{color:'#cf942e',lineWidth:1,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
+      const rsi=chart.addSeries(L.LineSeries,{title:'RSI14',color:'#7755b5',lineWidth:1,priceLineVisible:false,priceFormat:{type:'price',precision:2,minMove:.01},autoscaleInfoProvider:()=>({priceRange:{minValue:0,maxValue:100}})},1);
+      const adx=chart.addSeries(L.LineSeries,{title:'ADX14',color:'#087f85',lineWidth:1,priceLineVisible:false,priceFormat:{type:'price',precision:2,minMove:.01},autoscaleInfoProvider:()=>({priceRange:{minValue:0,maxValue:100}})},2);
+      for(const value of [30,70])rsi.createPriceLine({price:value,title:String(value),color:'#b9accf',lineWidth:1,lineStyle:L.LineStyle.Dashed,axisLabelVisible:false});
+      chart.panes?.()[1]?.setHeight(95);chart.panes?.()[2]?.setHeight(95);
       const root=element.closest('.room-chart'),resize=()=>{if(!view||view.element!==element)return;chart.applyOptions({autoSize:true});};
       const applyExpanded=()=>{root?.classList.toggle('chart-expanded',expanded);const button=document.getElementById('chart-fullscreen');if(button){button.textContent=expanded?'Exit fullscreen':'Fullscreen';button.setAttribute('aria-pressed',String(expanded));}};
       const fullscreenChanged=()=>{if(!document.fullscreenElement)expanded=false;applyExpanded();resize();};
       const observer=typeof ResizeObserver==='undefined'?null:new ResizeObserver(resize);observer?.observe(element);
-      view={element,key:model.key,chart,candles,ema20,ema50,root,resize,fullscreenChanged,observer,model:null,levels:[],ltp:null,ltpPrice:null,hadData:false};
+      view={element,key:model.key,chart,candles,ema20,ema50,rsi,adx,root,resize,fullscreenChanged,observer,model:null,levels:[],ltp:null,ltpPrice:null,hadData:false};
       applyExpanded();
       window.addEventListener('resize',resize);document.addEventListener('fullscreenchange',fullscreenChanged);
       chart.subscribeCrosshairMove(param=>{
         if(!view||view.element!==element)return;const row=param.seriesData?.get(candles);
-        if(readout)readout.textContent=row&&row.open!==undefined?describe(row,view.model):view.latest;
+        if(readout)readout.textContent=row&&row.open!==undefined?describe(row,view.model)+` · EMA20 ${indicator(param,ema20)} · EMA50 ${indicator(param,ema50)} · RSI14 ${indicator(param,rsi)} · ADX14 ${indicator(param,adx)}`:view.latest;
       });
       const zoom=factor=>{const scale=chart.timeScale(),r=scale.getVisibleLogicalRange();if(!r)return;const center=(r.from+r.to)/2,half=Math.max(5,(r.to-r.from)*factor/2);scale.setVisibleLogicalRange({from:center-half,to:center+half});};
       const bind=(id,fn)=>{const button=document.getElementById(id);if(button)button.onclick=fn;};
@@ -62,17 +66,19 @@
     const prepended=view.hadData&&view.model?.bars[0]?.time!==model.bars[0]?.time,oldRange=prepended?view.chart.timeScale().getVisibleRange?.():null;
     view.model=model;
     if(changed){
-      view.candles.setData(model.bars);view.ema20.setData(model.ema20);view.ema50.setData(model.ema50);
+      view.candles.setData(model.bars);view.ema20.setData(model.ema20);view.ema50.setData(model.ema50);view.rsi.setData(model.rsi14||[]);view.adx.setData(model.adx14||[]);
       if(model.last&&!view.hadData){const saved=ranges.get(model.key),end=model.bars.length-1;if(saved?.time)view.chart.timeScale().setVisibleRange(saved.time);else view.chart.timeScale().setVisibleLogicalRange(saved?.logical||{from:Math.max(0,end-85),to:Math.max(0,end)+6});view.hadData=true;}
       else if(oldRange)view.chart.timeScale().setVisibleRange(oldRange);
     }
     view.ema20.applyOptions({visible:model.showEma20});view.ema50.applyOptions({visible:model.showEma50});
     const levelKey=JSON.stringify(model.levels);
     if(view.levelKey!==levelKey){for(const line of view.levels)view.candles.removePriceLine(line);view.levels=model.levels.map(level=>view.candles.createPriceLine({...level,lineWidth:1,lineStyle:L.LineStyle.Dashed,axisLabelVisible:true}));view.levelKey=levelKey;}
-    view.latest=model.last?describe(model.last,model):'No complete bars in the bounded saved-history view. Fetch source data in Dhan data; missing candles are not filled.';
+    view.latest=model.last?describe(model.last,model)+` · EMA20 ${value(model.ema20?.at(-1)?.value)} · EMA50 ${value(model.ema50?.at(-1)?.value)} · RSI14 ${value(model.rsi14?.at(-1)?.value)} · ADX14 ${value(model.adx14?.at(-1)?.value)}`:'No complete bars in the bounded saved-history view. Fetch source data in Dhan data; missing candles are not filled.';
     if(readout)readout.textContent=view.latest;
     live(model.live);
   }
+  const value=v=>typeof v==='number'&&Number.isFinite(v)?number(v):'—';
+  const indicator=(param,series)=>value(param.seriesData?.get(series)?.value);
   function describe(row,model){return `${model.source} · ${date.format(new Date(row.time*1000))} IST · O ${number(row.open)} H ${number(row.high)} L ${number(row.low)} C ${number(row.close)} · ${model.minutes}m closed candle · index points`;}
   function live(row){
     if(!view)return;

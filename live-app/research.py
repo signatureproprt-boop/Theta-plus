@@ -13,7 +13,7 @@ from runtime import IST
 from dhan_data import candle_count
 from provider import ProviderError
 
-RULE_VERSION='research-1.2'
+RULE_VERSION='research-1.3'
 POLICY={
     'candle':{'max_age_seconds':90,'timestamp':'exchange candle close','required':['exchange_at','received_at','open','high','low','close','volume']},
     'chain':{'max_age_seconds':10,'timestamp':'exchange quote, not server receipt','required':['expiry','strike','side','security_id','bid','ask','volume','oi']},
@@ -104,60 +104,24 @@ def saved_candles(store,symbol,clock=None,record_limit=100):
             'calendar':'Weekday regular-session filter only; holidays/special sessions not certified'}
 
 def aggregate(candles,minutes,clock):
-    """Exchange-session anchored, complete buckets only. Never partial HTF bars."""
-    groups={}
-    for r in candles:
-        at=stamp(r['timestamp']);local=at.astimezone(IST)
-        origin=local.replace(hour=9,minute=15,second=0,microsecond=0)
-        offset=int((local-origin).total_seconds()/60)
-        if not 0<=offset<375:continue
-        start=origin+timedelta(minutes=(offset//minutes)*minutes)
-        if start+timedelta(minutes=minutes)>clock or start.date()!=local.date():continue
-        groups.setdefault(start,[]).append(r)
-    out=[]
-    for start,rs in sorted(groups.items()):
-        rs=sorted(rs,key=lambda x:x['timestamp'])
-        expected=[int((start+timedelta(minutes=i)).timestamp()) for i in range(minutes)]
-        if [r['timestamp'] for r in rs]!=expected:continue
-        out.append({'timestamp':int(start.timestamp()),'closed_at':(start+timedelta(minutes=minutes)).isoformat(),
-                    'open':rs[0]['open'],'high':max(r['high'] for r in rs),'low':min(r['low'] for r in rs),
-                    'close':rs[-1]['close'],'volume':sum(r['volume'] for r in rs)})
-    return out
-
-def ema(values,period):
-    if len(values)<period:return None
-    avg=sum(values[:period])/period
-    for x in values[period:]:avg+=(x-avg)*2/(period+1)
-    return avg
+    """Same normalized, complete buckets used by chart and indicator engine."""
+    from indicator_engine import normalized,grid
+    rows,_,_=normalized(candles,clock)
+    return [dict(timestamp=r['time'],closed_at=stamp(r['time']+minutes*60).isoformat(),
+                 **{k:r[k] for k in ('open','high','low','close','volume')})
+            for r in grid(rows,minutes,clock) if 'close' in r]
 
 def momentum(bars,period=14):
-    """Wilder smoothing; informational indicators, never an entry on their own."""
-    if len(bars)<=period:return {'rsi14':None,'adx14':None,'plus_di':None,'minus_di':None}
-    gains=[];losses=[];tr=[];plus=[];minus=[]
-    for a,b in zip(bars,bars[1:]):
-        delta=b['close']-a['close'];gains.append(max(0,delta));losses.append(max(0,-delta))
-        tr.append(max(b['high']-b['low'],abs(b['high']-a['close']),abs(b['low']-a['close'])))
-        up=b['high']-a['high'];down=a['low']-b['low']
-        plus.append(up if up>down and up>0 else 0);minus.append(down if down>up and down>0 else 0)
-    def smooth(values):
-        avg=sum(values[:period])/period;out=[avg]
-        for v in values[period:]:avg=(avg*(period-1)+v)/period;out.append(avg)
-        return out
-    gain=smooth(gains)[-1];loss=smooth(losses)[-1]
-    rsi=100-100/(1+gain/loss) if loss else 100 if gain else 50
-    ts=smooth(tr);ps=smooth(plus);ms=smooth(minus)
-    pdi=[100*p/t if t else 0 for p,t in zip(ps,ts)];mdi=[100*m/t if t else 0 for m,t in zip(ms,ts)]
-    dx=[100*abs(p-m)/(p+m) if p+m else 0 for p,m in zip(pdi,mdi)]
-    return {'rsi14':rsi,'adx14':smooth(dx)[-1] if len(dx)>=period else None,'plus_di':pdi[-1],'minus_di':mdi[-1]}
+    """Compatibility entry point; all arithmetic stays in the shared engine."""
+    if period!=14:raise ValueError('Only Wilder period 14 is supported')
+    from indicator_engine import calculate
+    minutes=max(1,int((bars[1]['timestamp']-bars[0]['timestamp'])/60)) if len(bars)>1 else 1
+    result=calculate([dict(time=r['timestamp'],**{k:r[k] for k in ('open','high','low','close')}) for r in bars],minutes)['snapshot']
+    return {k:result[k] for k in ('rsi14','adx14','plus_di','minus_di')}
 
 def indicators(candles,clock):
-    result={}
-    for minutes in (1,5,15,60):
-        bars=aggregate(candles,minutes,clock);close=[r['close'] for r in bars]
-        e20,e50=ema(close,20),ema(close,50)
-        result[str(minutes)]={'bars':len(bars),'ema20':e20,'ema50':e50,
-            'bias':'UNAVAILABLE' if e20 is None or e50 is None else 'BULLISH' if e20>e50 else 'BEARISH' if e20<e50 else 'SIDEWAYS',**momentum(bars)}
-    return result
+    from indicator_engine import build
+    return {key: value['snapshot'] for key,value in build(candles,clock)['frames'].items()}
 
 def chain_analysis(record,clock,options=None):
     if not record:return {'status':'NOT_FETCHED','contracts':[],'pcr_oi':None,'pcr_volume':None,'pcr_history':None,'iv_percentile':None}
@@ -233,7 +197,9 @@ def price_room(candles,clock,side,invalidation):
 
 def setup_rules(candles,clock,setup,config=None,contract=None,breadth=None,context_fresh=False,room_r=None,indicator_view=None,pattern_asof_close=False):
     cfg=config or RuleConfig();reasons=[];missing=[];wait=[];reject=[]
-    closed=[r for r in candles if stamp(r['timestamp'])+timedelta(minutes=1)<=clock]
+    from indicator_engine import normalized,opening_range
+    clean,_,_=normalized(candles,clock)
+    closed=[row for _,row in sorted(clean.items())]
     today=[r for r in closed if stamp(r['timestamp']).astimezone(IST).date()==clock.astimezone(IST).date()]
     five=aggregate(today,5,clock);ind=indicator_view if indicator_view is not None else indicators(closed,clock);bias=ind['60']['bias'];direction=None
     if bias=='UNAVAILABLE':missing.append('HTF_WARMUP_REQUIRED')
@@ -241,14 +207,16 @@ def setup_rules(candles,clock,setup,config=None,contract=None,breadth=None,conte
     elif ind['15']['bias']!=bias:
         (missing if ind['15']['bias']=='UNAVAILABLE' else reject).append('HTF_CONFLICT' if ind['15']['bias']!='UNAVAILABLE' else 'MTF_WARMUP_REQUIRED')
     else:reasons.append('HTF_ALIGNED');direction='CE' if bias=='BULLISH' else 'PE'
+    start=clock.astimezone(IST).replace(hour=9,minute=15,second=0,microsecond=0)
+    expected_count=min(375,max(0,int((clock-start).total_seconds()//60)))
+    if len(today)<expected_count:missing.append('CANDLE_GAPS')
     level=invalid=trigger=None
     if setup=='opening_range':
-        opening=[r for r in today if '09:15'<=stamp(r['timestamp']).astimezone(IST).strftime('%H:%M')<'09:30']
-        expected={int(clock.astimezone(IST).replace(hour=9,minute=15,second=0,microsecond=0).timestamp())+i*60 for i in range(15)}
-        if {r['timestamp'] for r in opening}!=expected:missing.append('OPENING_RANGE_INCOMPLETE')
+        orb=opening_range(clean,clock.astimezone(IST).date(),clock)
+        if orb['state']!='COMPLETE':missing.append('OPENING_RANGE_INCOMPLETE')
         elif len(five)<5:wait.append('RETEST_PENDING')
         elif direction:
-            up=direction=='CE';level=max(r['high'] for r in opening) if up else min(r['low'] for r in opening)
+            up=direction=='CE';level=orb['high'] if up else orb['low']
             post=[r for r in five if stamp(r['timestamp']).astimezone(IST).strftime('%H:%M')>='09:30']
             breaks=[i for i,r in enumerate(post[:-1]) if (r['close']>level*(1+cfg.breakout_buffer_pct/100) if up else r['close']<level*(1-cfg.breakout_buffer_pct/100))]
             if not breaks:wait.append('RANGE_BREAK_PENDING')
@@ -262,7 +230,7 @@ def setup_rules(candles,clock,setup,config=None,contract=None,breadth=None,conte
                     if (last['close']>retest['high'] if up else last['close']<retest['low']):reasons.extend(['RETEST_HOLD_OK','FRESH_TRIGGER_OK'])
                     else:wait.append('FRESH_TRIGGER_PENDING')
     else:
-        fifteen=aggregate(closed,15,clock);avg=ema([r['close'] for r in fifteen[:-1]],20)
+        fifteen=aggregate(closed,15,clock);avg=ind.get('15',{}).get('previous_ema20')
         if avg is None or len(five)<2:missing.append('PULLBACK_WARMUP_REQUIRED')
         elif direction:
             bar=fifteen[-1];up=direction=='CE';level=avg;tol=avg*cfg.retest_tolerance_pct/100
@@ -414,18 +382,13 @@ def replay_report(store,p):
     # Precompute prefix-only indicator states once, then expose just the state
     # whose close time is <= each event. No future state enters setup_rules.
     from bisect import bisect_right
+    from indicator_engine import normalized,frame
+    clean,_,_=normalized(visible,p.clock)
     indicator_cache={}
     for minutes in (1,5,15,60):
-        series=aggregate(visible,minutes,p.clock);states=[];times=[];sums={20:0.,50:0.};averages={20:None,50:None}
-        for i,bar in enumerate(series):
-            for period in (20,50):
-                if i<period:sums[period]+=bar['close']
-                if i==period-1:averages[period]=sums[period]/period
-                elif i>=period:averages[period]+=(bar['close']-averages[period])*2/(period+1)
-            e20,e50=averages[20],averages[50]
-            states.append({'bars':i+1,'ema20':e20,'ema50':e50,'bias':'UNAVAILABLE' if e20 is None or e50 is None else 'BULLISH' if e20>e50 else 'BEARISH' if e20<e50 else 'SIDEWAYS'})
-            times.append(stamp(bar['closed_at']))
-        indicator_cache[str(minutes)]=(times,states)
+        computed=frame(clean,minutes,p.clock)
+        times=[stamp(bar['time'])+timedelta(minutes=minutes) for bar in computed['bars']]
+        indicator_cache[str(minutes)]=(times,computed['states'])
     def known_indicators(at):
         view={}
         for key,(times,states) in indicator_cache.items():
@@ -463,6 +426,9 @@ def workspace(store,symbol,clock=None,options=None,contract_id=''):
     from session_chart import future_vwap
     future_record=store.document('research/future/'+symbol)[0]
     futures=future_vwap(future_record,clock) if future_record and stamp(future_record.get('received_at')) and stamp(future_record['received_at'])<=clock else {'state':'NOT_CONNECTED','value':None}
+    from indicator_engine import build
+    indicator_chart=build(candles,clock)
+    indicator_view={key:value['snapshot'] for key,value in indicator_chart['frames'].items()}
     today=clock.astimezone(IST).date().isoformat()
     session_quality=[{'date':day,'observed_minutes':count,'missing_regular_grid_minutes':max(0,375-count),
                       'calendar_certified':False} for day,count in sorted(session_rows.items())]
@@ -478,9 +444,9 @@ def workspace(store,symbol,clock=None,options=None,contract_id=''):
     ]
     return {'readiness':readiness,'futures_context':futures,'symbol':symbol,'server_time':clock.isoformat(),'mode':'READ_ONLY_RESEARCH','rule_version':RULE_VERSION,
             'session_quality':session_quality,
-            'policies':POLICY,'history':loaded,'indicators':indicators(candles,clock),
+            'policies':POLICY,'history':loaded,'indicators':indicator_view,'indicator_chart':indicator_chart,
             'latest_candle':latest,'candle_freshness':freshness(latest['closed_at'],latest['received_at'],clock,90) if latest else {'state':'MISSING'},
-            'breadth':breadth,'chain':chain,'selected_contract':contract,'setups':[setup_rules(candles,clock,s,contract=contract,breadth=breadth) for s in ('opening_range','trend_pullback')],
+            'breadth':breadth,'chain':chain,'selected_contract':contract,'setups':[setup_rules(candles,clock,s,contract=contract,breadth=breadth,indicator_view=indicator_view) for s in ('opening_range','trend_pullback')],
             'availability':{'breadth':breadth['state'],'events':'NOT_CONNECTED','futures_vwap':futures['state'],
                             'continuous_feed':'SEE_LIVE_PANEL_STATUS','iv_percentile':'HISTORY_UNVERIFIED','pcr_history':'CADENCE_UNVERIFIED'},
             'validation':{'rule_state':'UNVALIDATED','paper_trade_minimum':50,'multiple_regimes_required':True,

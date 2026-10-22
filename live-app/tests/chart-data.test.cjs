@@ -24,11 +24,9 @@ test('opening range requires all 15 source minutes and confirmed close; extremes
   const r=build(rows,5,start+20*60);
   assert.equal(r.levels.find(r=>r.title==='ORB 15m high').price,116);assert.equal(r.levels.find(r=>r.title==='Today high').price,121);
 });
-test('EMA uses full warm-up, resets after a missing minute and never mutates source candles',()=>{
-  const rows=Array.from({length:80},(_,i)=>row(i));rows.splice(50,1);
-  const before=JSON.stringify(rows),r=build(rows,1,start+80*60);
-  assert.equal(r.ema20[18].value,undefined);assert.equal(r.ema20[19].value,101);assert.equal(r.ema50[49].value,101);assert.equal(r.ema20[50].value,undefined);
-  assert.equal(r.ema20[69].value,undefined);assert.equal(r.ema20[70].value,101);assert.equal(r.ema50[79].value,undefined);assert.equal(JSON.stringify(rows),before);
+test('legacy candle adapter never calculates its own indicator values',()=>{
+  const rows=Array.from({length:80},(_,i)=>row(i));const before=JSON.stringify(rows),r=build(rows,1,start+80*60);
+  assert.deepEqual(r.ema20,[]);assert.deepEqual(r.ema50,[]);assert.equal(JSON.stringify(rows),before);
 });
 test('no synthetic candles are created from empty or off-session source data',()=>{
   assert.deepEqual(build([],5,start+900).bars,[]);
