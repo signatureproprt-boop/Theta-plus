@@ -69,6 +69,26 @@ class Store:
             rows=c.execute('SELECT * FROM records WHERE kind=? ORDER BY id DESC LIMIT ?', (kind,limit)).fetchall()
         return [self.decode(r) for r in rows]
 
+    def diagnostic_names(self,namespace,after='',limit=25):
+        if namespace=='documents':return self.document_names('',after,limit)
+        with self.connect() as c:
+            if namespace=='records':
+                return [str(r[0]).zfill(20) for r in c.execute('SELECT id FROM records WHERE id>? ORDER BY id LIMIT ?', (int(after or 0),limit))]
+            if namespace=='journal':
+                return [r[0] for r in c.execute('SELECT plan_id FROM journal WHERE plan_id>? ORDER BY plan_id LIMIT ?', (after,limit))]
+        raise ValueError('Unknown diagnostic namespace')
+
+    def diagnostic_read(self,namespace,key):
+        if namespace=='documents':return self.document(key)[0]
+        with self.connect() as c:
+            if namespace=='records':
+                row=c.execute('SELECT * FROM records WHERE id=?',(int(key),)).fetchone()
+                return {**self.decode(row),'kind':row['kind']} if row else None
+            if namespace=='journal':
+                row=c.execute('SELECT * FROM journal WHERE plan_id=?',(key,)).fetchone()
+                return json.loads(row['payload']) if row else None
+        raise ValueError('Unknown diagnostic namespace')
+
     @staticmethod
     def decode(r):
         return {'id':r['id'],'created_at':r['created_at'],'data':json.loads(r['payload'])}

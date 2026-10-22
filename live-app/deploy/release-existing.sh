@@ -89,6 +89,23 @@ retired_status=$(curl --silent --show-error --max-time 30 --output /dev/null --w
 curl --fail --silent --show-error --max-time 30 "$url/api/dhan/collected" > "$work/retained-data.json"
 collection_status=$(curl --silent --show-error --max-time 30 --output /dev/null --write-out '%{http_code}' -H 'Content-Type: application/json' --data '{}' "$url/api/collection/catalogue/refresh")
 [[ $collection_status == 403 || $collection_status == 503 ]] || { echo 'Collection Admin protection failed' >&2; exit 1; }
+# Confirm deployed dashboard bytes before release is accepted; trap restores traffic on failure.
+python3 - "$url" <<'PYDASHBOARD'
+from pathlib import Path
+from hashlib import sha256
+from urllib.request import urlopen
+import sys
+url=sys.argv[1]
+for name in ('dashboard.js','dashboard.css','research.js','terminal.js','research-live.js'):
+    expected=sha256((Path('static')/name).read_bytes()).hexdigest()
+    with urlopen(url+'/static/'+name+'?release=dashboard',timeout=30) as response:
+        observed=sha256(response.read()).hexdigest()
+    if observed!=expected:raise RuntimeError('Dashboard asset mismatch: '+name)
+with urlopen(url+'/',timeout=30) as response:html=response.read().decode()
+if 'dashboard.js?v=3.8.1' not in html or 'dashboard.css?v=3.8.3' not in html:
+    raise RuntimeError('Dashboard assets not referenced by serving HTML')
+print('Dashboard HTML and exact source assets verified.')
+PYDASHBOARD
 python3 deploy/sync_worker_image.py "$work/candidate.json"
 promoted=false
 printf '\nDEPLOY VERIFIED\nVersion: %s\nRevision: %s\nURL: %s\n' "$expected_version" "$candidate" "$url"

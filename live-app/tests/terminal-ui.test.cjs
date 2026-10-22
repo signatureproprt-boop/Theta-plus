@@ -7,9 +7,10 @@ function env(){
  const nodes=new Map(),events={},windowEvents={},calls=[],selected=[];
  const node=id=>{if(!nodes.has(id))nodes.set(id,{innerHTML:'',textContent:'',listeners:{},addEventListener(n,fn){this.listeners[n]=fn;}});return nodes.get(id);};
  const payload={items:[{key:'nifty',label:'NIFTY 50',group:'India',price:22888.95,status:'STALE',quote_at:'2026-10-19T09:59:00Z'},{key:'gold',label:'Gold <img src=x>',group:'Commodity',price:null,status:'NO_QUOTE'}],fetched_at:'2026-10-20T12:00:00Z'};
- const context={document:{getElementById:node,addEventListener(n,fn){events[n]=fn;}},window:{addEventListener(n,fn){windowEvents[n]=fn;},thetaApiFetch:async(url,options)=>{calls.push({url,options});return {ok:true,payload:url.includes('collection')?{jobs:[{state:'running',rows_saved:15,counts:{failed:2},config:{families:['daily']}}]}:payload};},thetaReadResponse:async r=>r.payload,thetaResearchShow(){},thetaResearchSelectSymbol(v){selected.push(v);}},location:{hash:'#home'},AbortSignal:{timeout:()=>undefined},Intl,Date,console};
+ const timers=[];
+ const context={setInterval(fn,ms){timers.push({fn,ms});return timers.length;},document:{getElementById:node,addEventListener(n,fn){events[n]=fn;}},window:{addEventListener(n,fn){windowEvents[n]=fn;},thetaApiFetch:async(url,options)=>{calls.push({url,options});return {ok:true,payload:url.includes('collection')?{jobs:[{state:'running',rows_saved:15,counts:{failed:2},config:{families:['daily']}}]}:payload};},thetaReadResponse:async r=>r.payload,thetaResearchShow(){},thetaResearchSelectSymbol(v){selected.push(v);}},location:{hash:'#home'},AbortSignal:{timeout:()=>undefined},Intl,Date,console};
  vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/terminal.js'),'utf8'),context);
- return {node,calls,events,windowEvents,selected,context,flush:async()=>{for(let i=0;i<6;i++)await new Promise(r=>setImmediate(r));}};
+ return {node,calls,events,windowEvents,selected,context,timers,flush:async()=>{for(let i=0;i<6;i++)await new Promise(r=>setImmediate(r));}};
 }
 test('compact terminal reads saved observations without starting provider, collection or orders',async()=>{
  const e=env();await e.flush();assert.equal(e.calls.length,2);assert.ok(e.calls.every(c=>c.options.method==='GET'));
@@ -26,4 +27,11 @@ test('watch search and instrument selection do not fabricate a chart for unsuppo
 test('only explicit market refresh sends one provider POST',async()=>{
  const e=env();await e.flush();const button={disabled:false};await e.node('terminal-market-refresh').listeners.click({target:button});
  const post=e.calls.filter(c=>c.options.method==='POST');assert.equal(post.length,1);assert.equal(post[0].url,'/api/markets/refresh');assert.equal(button.disabled,false);
+});
+
+test('saved quote timer uses GET only and pauses while the page is hidden',async()=>{
+ const e=env();await e.flush();assert.equal(e.timers.length,1);assert.equal(e.timers[0].ms,15000);
+ e.context.document.hidden=true;await e.timers[0].fn();assert.equal(e.calls.length,2);
+ e.context.document.hidden=false;await e.timers[0].fn();assert.equal(e.calls.length,3);
+ assert.ok(e.calls.every(c=>c.options.method==='GET'));
 });

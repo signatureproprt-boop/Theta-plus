@@ -166,8 +166,8 @@ def test_ninety_day_intraday_thirty_day_rolling_and_strike_limits(setup):
     assert t['from']=='2026-01-01' and t['to']=='2026-04-01'
     item=instrument(instrument='OPTIDX',segment='NSE_FNO',expiry_flags=['MONTH'])
     variants=c.variants('rolling',item,job)
-    assert len([v for v in variants if v['expiryCode']==0 and v['expiryFlag']=='MONTH'])==42
-    assert len([v for v in variants if v['expiryCode']==1 and v['expiryFlag']=='MONTH'])==14
+    assert len([v for v in variants if v['expiryCode']==1 and v['expiryFlag']=='MONTH'])==42
+    assert len([v for v in variants if v['expiryCode']==2 and v['expiryFlag']=='MONTH'])==14
     t=c.task(job,'rolling',item)
     assert t['to']=='2026-01-31'
     stock=instrument(instrument='OPTSTK',expiry_flags=['MONTH'])
@@ -325,7 +325,7 @@ def test_live_capture_reports_missing_subscribed_instruments(setup,monkeypatch):
     c,p,s=setup
     from types import SimpleNamespace
     p.credentials=SimpleNamespace(token=lambda:'fixture-token',client_id='fixture-client')
-    packet=struct.pack('<BHBI',1,8,0,13)
+    packet=struct.pack('<BHBIfI',2,16,0,13,22888.0,1792554000)
     class Socket:
         def __init__(self):self.done=False
         async def __aenter__(self):return self

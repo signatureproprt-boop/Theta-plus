@@ -18,7 +18,12 @@
     const startDate=new Date(end+'T00:00:00Z');
     startDate.setUTCFullYear(startDate.getUTCFullYear()-5);
     const start=startDate.toISOString().slice(0,10);
-    $('#page-collect').innerHTML = `<article class="card"><div class="card-head"><h2>Complete Dhan collection</h2></div><div class="card-body">
+    $('#page-collect').innerHTML = `<article class="card"><div class="card-head"><h2>Automatic data system</h2></div><div class="card-body">
+      <button class="button" id="data-system-start">Start automatic data system</button>
+      <button class="button secondary" id="data-system-pause">Pause recording / schedules</button>
+      <button class="button secondary" id="data-system-refresh">Refresh data status</button>
+      <div id="data-system-feedback" role="status"></div><div id="data-system-status">Checking unattended recorder and daily updates…</div>
+      </div></article><article class="card"><div class="card-head"><h2>Complete Dhan collection</h2></div><div class="card-body">
       <p>Collect the available instrument catalogue, history and market snapshots. Every selected item gets an outcome; unavailable data is listed with its reason.</p>
       <p>Open <button class="button secondary" data-go="admin">Admin</button> and unlock with your existing password to manage collection.</p>
       <button class="button" id="catalogue-refresh">Refresh full instrument catalogue</button>
@@ -33,7 +38,7 @@
       </div><fieldset><legend>Data to collect</legend><div class="collection-options">${families.map(f=>`<label><input type="checkbox" name="collect-family" value="${f}" checked> ${labels[f]}</label>`).join('')}</div></fieldset>
       <fieldset><legend>Intraday / expired-option intervals</legend><div class="collection-options">${[1,5,15,25,60].map(i=>`<label><input type="checkbox" name="collect-interval" value="${i}" checked> ${i} min</label>`).join('')}</div></fieldset>
       <p>The default range is the last five years; it does not establish full historical coverage. Daily history is requested from your chosen start date. First verify a short range for one symbol before creating a full plan. Minute and rolling history have a documented five-year horizon. Full-universe collection can take a long time and use substantial storage.</p>
-      <p>Live and depth selections save one ten-second binary sample per eligible instrument. They do not provide continuous all-market recording or historical depth. Foreign-market feeds need separate verification. Complete historical session checks and continuous live recording are pending.</p>
+      <p>Live and depth selections save one ten-second binary sample per eligible instrument. They do not provide continuous all-market recording or historical depth. Foreign-market feeds need separate verification. Use Automatic data system above for unattended recording and daily catch-up. Subscription scope and remaining gaps are shown separately.</p>
       <label><input type="checkbox" id="collect-continue-rejected"> Continue other data when Dhan rejects a request; record it as failed / not collected. Token and permission errors still stop.</label><button class="button" type="submit">Create collection plan</button></form>
       <div id="collection-feedback" role="status"></div></div></article>
       <article class="card collection-card"><div class="card-head"><h2>Collection progress</h2></div><div class="card-body">
@@ -45,6 +50,29 @@
       <button class="button secondary" id="collection-skip">Record blocked item and continue</button><button class="button secondary" id="collection-results">View results</button>
       <div id="collection-result-list"></div><button class="button secondary" id="collection-results-more" hidden>More results</button>
       </div></article>`;
+  }
+  let systemBusy=false;
+  async function refreshDataSystem(){
+    if(systemBusy)return;systemBusy=true;
+    try{
+      const response=await window.thetaApiFetch('/api/data-system',{signal:AbortSignal.timeout(30000)});
+      const data=await window.thetaReadResponse(response);
+      const streams=Object.entries(data.streams||{}).map(([name,r])=>`<tr><td>${esc(name)}</td><td>${esc(r.state)}</td><td>${esc(r.subscribed??0)}</td><td>${esc(r.last_durable_received_at||'No durable frames yet')}</td><td>${esc(r.missing_since_connection??'—')}</td></tr>`).join('');
+      const history=Object.entries(data.maintenance?.history||{}).map(([name,r])=>`<tr><td>${esc(name)}</td><td>${esc(r.state)}</td><td>${esc(r.start)} → ${esc(r.end)} exclusive</td><td>${esc(JSON.stringify(r.counts||{}))}</td></tr>`).join('');
+      const outcomes=Object.entries(data.audit?.job_groups||{}).map(([name,r])=>`<tr><td>${esc(name)}</td><td>${esc(JSON.stringify(r.states))}</td><td>${esc(JSON.stringify(r.attempt_outcomes))}</td></tr>`).join('');
+      $('#data-system-status').innerHTML=`<p><b>${data.enabled?'Enabled':'Paused / not enabled'}</b> · Worker: ${data.worker_active?'Active':'Not active'} · Maintenance: ${esc(data.maintenance?.state||'Not started')} · NSE session: ${esc(data.calendar?.state||'Unverified')}</p>
+        ${data.scope_warning?'<p role="status">'+esc(data.scope_warning)+'</p>':''}
+        <p>Recent internal diagnostics: ${esc(data.diagnostics?.total??0)} · ${esc((data.diagnostics?.items||[]).slice(0,3).map(r=>r.stage+': '+r.exception_type+' ['+r.id+']').join(' · '))}</p>
+        <p>${esc(data.scope||'Subscription scope has not been prepared.')} · Live capacity excluded: ${esc(data.live_capacity_excluded??'Not assessed')}.</p>
+        <div class="table-wrap"><table><thead><tr><th>Feed</th><th>State</th><th>Subscribed</th><th>Last durable receipt</th><th>Not observed since connection</th></tr></thead><tbody>${streams}</tbody></table></div>
+        <p>Depth20: ${esc(data.depth20_scope||'Scope not resolved')} · Other contracts not subscribed: ${esc(data.depth20_unsubscribed??'Not assessed')}. Depth200 records one exact NIFTY futures contract.</p>
+        <div class="table-wrap"><table><thead><tr><th>Daily catch-up</th><th>Job state</th><th>Requested dates</th><th>Outcomes</th></tr></thead><tbody>${history||'<tr><td colspan="4">Daily catch-up not scheduled yet.</td></tr>'}</tbody></table></div>
+        <div class="table-wrap"><table><thead><tr><th>Saved job families</th><th>States</th><th>Attempt outcomes (includes retries)</th></tr></thead><tbody>${outcomes||'<tr><td colspan="3">Audit pending.</td></tr>'}</tbody></table></div>
+        <p>Unresolved catalogue mappings: ${esc(JSON.stringify(data.audit?.unresolved_catalogue_reasons||{}))}. Outcome counts are attempts, not a coverage percentage.</p>
+        <p>Watchdog: ${data.watchdog?.reported_configured?'Configured by deployment; restart acceptance test pending':'Not configured'} · ${esc(data.completion||'Coverage not certified')}</p>
+        ${data.maintenance?.error?'<p role="status">'+esc(data.maintenance.error)+'</p>':''}`;
+    }catch(error){$('#data-system-status').textContent='Data system status unavailable: '+error.message;}
+    finally{systemBusy=false;}
   }
   let jobCursor='', resultCursor='';
   function feedback(text) { $('#collection-feedback').textContent=text; }
@@ -66,6 +94,7 @@
     <p>Current item: ${esc(job.current_item ? job.current_item.family+' / '+job.current_item.symbol+' / '+job.current_item.segment+' / '+job.current_item.from+' → '+job.current_item.to : '—')}</p><p>Updated: ${esc(job.updated_at)}</p>`;
   }
   async function refresh(append=false) {
+    void refreshDataSystem();
     const [cat,list,engine]=await Promise.all([get('catalogue'),get('jobs'+(append && jobCursor?'?after='+encodeURIComponent(jobCursor):'')),get('engine')]);
     background=!!engine.worker?.configured;
     $('#collection-engine').textContent='Official DhanHQ-py '+(engine.sdk?.version || 'unavailable')+' · '+(background?'Cloud worker configured':'Browser runner');
@@ -98,9 +127,10 @@
     if (!active) throw Error('Select a collection job first.');
     const data=await get('jobs/'+active+'/results'+(append && resultCursor?'?after='+encodeURIComponent(resultCursor):''));
     const rows=data.items.map(e=>`<tr><td>${esc(e.task.item.symbol)}<br>${esc(e.task.item.segment || e.task.item.exchange+'_'+e.task.item.raw_segment)}</td>
-    <td>${esc(e.task.family)}<br>${esc(['daily','intraday','rolling'].includes(e.task.family) ? e.task.from+' → '+e.task.to : 'Current sample / snapshot')}</td><td>${esc(e.result.status)}<br>${esc(e.result.reason || e.result.quality || '')}${e.result.missing_security_ids?.length?'<br>'+esc(e.result.missing_security_ids.length)+' missing instruments':''}${e.result.instruments_assessed?'<br>'+esc(e.result.instruments_assessed)+' identities assessed':''}${e.result.isolated_probes?'<br>'+esc(e.result.isolated_probes)+' isolated probes':''}<br>${esc(e.result.coverage||'Coverage not verified')}</td>
+    <td>${esc(e.task.family)}<br>${esc(['daily','intraday','rolling'].includes(e.task.family) ? e.task.from+' → '+e.task.to : 'Current sample / snapshot')}</td><td>${esc(e.result.status)}<br>${esc(e.result.reason || e.result.quality || '')}${e.result.quarantined_rows?'<br>'+esc(e.result.quarantined_rows)+' invalid candles excluded; coverage incomplete':''}${e.result.missing_security_ids?.length?'<br>'+esc(e.result.missing_security_ids.length)+' missing instruments':''}${e.result.instruments_assessed?'<br>'+esc(e.result.instruments_assessed)+' identities assessed':''}${e.result.isolated_probes?'<br>'+esc(e.result.isolated_probes)+' isolated probes':''}<br>${esc(e.result.coverage||'Coverage not verified')}</td>
     <td>${esc(e.result.rows)}${e.result.duplicate_timestamps ? ' · duplicates: '+esc(e.result.duplicate_timestamps):''}</td><td>
     ${e.result.raw_key?`<button class="button secondary" data-collection-export="${esc(e.result.raw_key)}">Raw JSON</button>`:''}
+    ${e.result.quarantine_key?`<button class="button secondary" data-collection-export="${esc(e.result.quarantine_key)}">Excluded candles</button>`:''}
     ${['failed','partial','empty','permission_blocked'].includes(e.result.status)?`<button class="button secondary" data-collection-retry="${esc(e.key)}">Retry missing / failed</button><button class="button secondary" data-collection-diagnose="${esc(e.key)}">Diagnose</button>`:''}</td></tr>`).join('');
     if (append) $('#collection-result-body').insertAdjacentHTML('beforeend',rows);
     else $('#collection-result-list').innerHTML=`<div class="table-wrap"><table><thead><tr><th>Instrument</th><th>Data / dates</th><th>Outcome</th><th>Rows</th><th>Actions</th></tr></thead><tbody id="collection-result-body">${rows || '<tr><td colspan="5">No outcomes yet.</td></tr>'}</tbody></table></div>`;
@@ -109,9 +139,16 @@
   }
   document.addEventListener('click',async e=>{
     const b=e.target.closest('button'); if (!b) return;
-    if (!b.id.startsWith('collection-') && b.id!=='catalogue-refresh' && !Object.keys(b.dataset).some(k=>k.startsWith('collection'))) return;
+    if (!b.id.startsWith('data-system-') && !b.id.startsWith('collection-') && b.id!=='catalogue-refresh' && !Object.keys(b.dataset).some(k=>k.startsWith('collection'))) return;
     b.disabled=true;
     try {
+      if (b.id==='data-system-start'||b.id==='data-system-pause') {
+        if(!window.thetaAdminRequest)throw Error('Open Admin and unlock first.');
+        await window.thetaAdminRequest('data-system/'+(b.id==='data-system-start'?'start':'pause'),{});
+        $('#data-system-feedback').textContent=b.id==='data-system-start'?'Automatic data system enabled. Check actual recorder, daily jobs and watchdog status below.':'Recording and automatic schedules paused. Historical jobs retain their separate controls.';
+        await refreshDataSystem();
+      }
+      if (b.id==='data-system-refresh')await refreshDataSystem();
       if (b.id==='catalogue-refresh') {feedback('Fetching full catalogue. Please keep this page open.'); await write('catalogue/refresh'); await refresh(); feedback('Catalogue saved.');}
       if (b.id==='collection-profile') {const profile=await write('profile/check');feedback('Data plan: '+profile.data_plan+' · Active segments: '+(profile.active_segments || 'Not reported')+' · Valid until: '+profile.data_validity_reported);}
       if (b.id==='collection-skip') {running=false;if(active){const job=await write('jobs/'+active+'/'+(b.dataset.action||'skip-blocked'));showJob(job);feedback(job.message+' Press Resume selected job to start the worker.');}}
@@ -145,6 +182,7 @@
     finally {b.disabled=false;syncPolicyButtons();}
   });
   window.addEventListener('hashchange',()=>{if(location.hash!=='#collect')running=false;else refresh().catch(e=>feedback(e.message));});
+  setInterval(()=>{if(location.hash==='#collect')void refreshDataSystem();},15000);
   setInterval(()=>{if(background && active && location.hash==='#collect')get('jobs/'+active).then(showJob).catch(e=>feedback(e.message));},15000);
   panel(); if(location.hash==='#collect')refresh().catch(e=>feedback(e.message));
 })();

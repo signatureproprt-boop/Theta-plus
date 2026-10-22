@@ -1,10 +1,11 @@
 name: Dhan collection checks
 on:
+  workflow_dispatch:
   pull_request:
     paths: ['live-app/**', '.github/workflows/dhan-collection.yml']
   push:
     branches: [main]
-    paths: ['live-app/**']
+    paths: ['live-app/**', '.github/workflows/dhan-collection.yml']
 permissions:
   contents: read
 jobs:
@@ -20,6 +21,41 @@ jobs:
           node-version: '22'
       - run: python -m pip install -r live-app/requirements.lock.txt
       - run: PYTHONPATH=live-app python -m pytest -q live-app/tests
-      - run: node --test live-app/tests/terminal-ui.test.cjs live-app/tests/api-response.test.cjs live-app/tests/collection-ui.test.cjs live-app/tests/research-ui.test.cjs live-app/tests/research-live-ui.test.cjs live-app/tests/research-workflow-ui.test.cjs
+      - run: node --test live-app/tests/*.test.cjs
       - run: node --check live-app/static/terminal.js && node --check live-app/static/api-response.js && node --check live-app/static/research-workflow.js && node --check live-app/static/research-live.js && node --check live-app/static/research.js && node --check live-app/static/collection.js && node --check live-app/static/app.js && node --check live-app/static/token-admin.js
       - run: bash -n live-app/deploy/release-existing.sh
+      - run: node --check live-app/static/dashboard.js
+
+  deploy:
+    name: Deploy verified main to Theta Cloud Run
+    needs: checks
+    if: >-
+      github.repository == 'signatureproprt-boop/Theta-plus' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    concurrency:
+      group: theta-plus-production-release
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate deployment destination
+        env:
+          PROVIDER: ${{ vars.THETA_WIF_PROVIDER }}
+          DEPLOYER: ${{ vars.THETA_DEPLOY_SERVICE_ACCOUNT }}
+        run: |
+          test "$PROVIDER" = 'projects/261331732835/locations/global/workloadIdentityPools/theta-github-deploy/providers/github'
+          test "$DEPLOYER" = 'theta-plus-github@theta-pluse.iam.gserviceaccount.com'
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: theta-pluse
+          workload_identity_provider: ${{ vars.THETA_WIF_PROVIDER }}
+          service_account: ${{ vars.THETA_DEPLOY_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v3
+      - name: Deploy and verify candidate with rollback
+        working-directory: live-app
+        run: bash deploy/release-existing.sh

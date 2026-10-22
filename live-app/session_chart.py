@@ -5,13 +5,15 @@ from dhan_data import candle_count
 from provider import ProviderError
 from research import stamp,freshness
 from runtime import IST
+from data_calendar import session
 
 def session_view(record,clock):
     day=clock.astimezone(IST).date()
     start=datetime.combine(day,datetime.min.time(),IST).replace(hour=9,minute=15)
     end=start.replace(hour=15,minute=30)
     cutoff=min(clock.replace(second=0,microsecond=0),end)
-    expected=set(range(int(start.timestamp()),max(int(start.timestamp()),int(cutoff.timestamp())),60)) if day.weekday()<5 else set()
+    calendar=session(day)
+    expected=set(range(int(start.timestamp()),max(int(start.timestamp()),int(cutoff.timestamp())),60)) if day.weekday()<5 and calendar['state']!='CLOSED' else set()
     raw=record['raw'];candle_count(raw)
     rows={};conflicts=set();excluded=0
     for i,t in enumerate(raw['timestamp']):
@@ -27,7 +29,7 @@ def session_view(record,clock):
             'received_at':record['received_at'],'candles':candles,'freshness':status,
             'expected_minutes':len(expected),'missing_minutes':len(missing),'missing_timestamps':missing,
             'conflicting_minutes':len(conflicts),'excluded_rows':excluded,
-            'calendar':'Weekday regular session only; exchange holidays and special sessions not certified',
+            'calendar':calendar,
             'source':'Dhan charts/intraday · provider OHLC; no candles reconstructed from sampled live ticks',
             'signal_eligible':False}
 
@@ -46,7 +48,7 @@ async def refresh_session(provider,store,board,symbol,clock=None):
         return session_view(old,clock)
     start=datetime.combine(day,datetime.min.time(),IST).replace(hour=9,minute=15)
     end=min(clock.astimezone(IST).replace(second=0,microsecond=0),start.replace(hour=15,minute=30))
-    if day.weekday()>4 or end<=start:
+    if day.weekday()>4 or session(day)['state']=='CLOSED' or end<=start:
         raw={k:[] for k in ('timestamp','open','high','low','close','volume')};body=None
     else:
         body={'securityId':str(item['security_id']),'exchangeSegment':'IDX_I','instrument':'INDEX',
