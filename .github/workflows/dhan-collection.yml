@@ -25,6 +25,7 @@ jobs:
       - run: node --check live-app/static/terminal.js && node --check live-app/static/api-response.js && node --check live-app/static/research-workflow.js && node --check live-app/static/research-live.js && node --check live-app/static/research.js && node --check live-app/static/collection.js && node --check live-app/static/app.js && node --check live-app/static/token-admin.js
       - run: bash -n live-app/deploy/release-existing.sh
       - run: node --check live-app/static/dashboard.js
+      - run: node --check live-app/static/chart-data.js && node --check live-app/static/price-chart.js
 
   deploy:
     name: Deploy verified main to Theta Cloud Run
