@@ -209,3 +209,19 @@ test('price trigger progress and strict missing evidence render separately besid
  assert.match(html,/Price trigger observed · research only/);assert.match(html,/Evidence eligibility/);assert.match(html,/WAIT · Data incomplete/);
  assert.match(html,/name="target"/);assert.match(html,/event-calendar source is not connected/);
 });
+
+test('live chart ticks reuse timezone formatters over a large retained history and refresh new candles',async()=>{
+  const start=Date.parse('2026-10-01T03:45:00Z')/1000;
+  const candles=Array.from({length:7500},(_,i)=>({timestamp:start+Math.floor(i/375)*86400+(i%375)*60,open:100,high:102,low:99,close:101}));
+  const e=environment('research',{history:{candles}});await e.flush();
+  let constructors=0;
+  e.context.Intl={DateTimeFormat:class extends Intl.DateTimeFormat{constructor(...args){constructors++;super(...args);}}};
+  e.context.window.thetaLiveIsActive=()=>true;
+  for(let i=0;i<20;i++)e.context.window.thetaResearchTick({key:'nifty',ltp:101+i/100,trade_at:new Date().toISOString()});
+  assert.equal(constructors,0,'live ticks must not build formatters for each historical minute');
+  assert.match(e.element('research-chart').innerHTML,/O 100 H 102 L 99 C 101/);
+  const latest=start+19*86400;
+  e.context.window.thetaAdminRequest=async()=>({session_date:'2026-10-20',candles:Array.from({length:5},(_,i)=>({timestamp:latest+i*60,open:110,high:112,low:109,close:111})),expected_minutes:5,missing_minutes:0,freshness:{state:'STALE'},received_at:new Date().toISOString()});
+  await e.context.window.thetaSessionRefresh();
+  assert.match(e.element('research-chart').innerHTML,/O 110 H 112 L 109 C 111/);
+});
