@@ -7,6 +7,7 @@ cursor and provider-unavailable history are never certified by this scan.
 import asyncio
 import base64
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime,timezone
 import gzip
 import hashlib
@@ -334,7 +335,27 @@ def repair(collector,scan):
     return actions
 
 
-def tick(collector,page_size=25):
+def inventory_reads(store,namespace,names,deadline):
+    """Read at most eight objects concurrently, commit results in cursor order.
+
+    Only reads run in threads: findings, counters and the cursor still have one
+    writer. Stop between batches, never checkpoint past an uninspected object.
+    """
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for offset in range(0,len(names),8):
+            if offset and time.monotonic()>deadline:return
+            batch=names[offset:offset+8]
+            pending={key:pool.submit(store.diagnostic_read,namespace,key) for key in batch
+                     if not (namespace=='documents' and key.startswith('doctor/'))}
+            for key in batch:
+                if key not in pending:
+                    yield key,None,None
+                    continue
+                try:yield key,pending[key].result(),None
+                except Exception as error:yield key,None,error
+
+
+def tick(collector,page_size=100):
     """One bounded step. A failing object/check never silently stops other areas."""
     store=collector.store;scan=store.document(KEY)[0] or {}
     if not pending(store):return False
@@ -357,13 +378,14 @@ def tick(collector,page_size=25):
             namespace=NAMESPACES[scan['namespace']];names=store.diagnostic_names(namespace,scan.get('cursor',''),page_size)
             findings=dict(scan.get('findings',{}));examples=list(scan.get('examples',[]));errors=0;details=[]
             visited=[];deadline=time.monotonic()+12
-            for key in names:
-                if visited and time.monotonic()>deadline:break
+            for key,data,read_error in inventory_reads(store,namespace,names,deadline):
                 visited.append(key)
                 # Do not recursively inspect Doctor's own mutable report/probes.
                 if namespace=='documents' and key.startswith('doctor/'):continue
                 before=dict(findings)
-                try:inspect_document(namespace,key,store.diagnostic_read(namespace,key),findings)
+                try:
+                    if read_error is not None:raise read_error
+                    inspect_document(namespace,key,data,findings)
                 except Exception as error:
                     errors+=1;anomaly(findings,'unreadable_records')
                     detail={'namespace':namespace,'key':key,'diagnostic':fingerprint('doctor_record',error)}
