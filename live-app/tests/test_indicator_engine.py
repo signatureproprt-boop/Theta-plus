@@ -96,3 +96,20 @@ def test_futures_vwap_keeps_exact_identity_and_hides_stale_or_missing_minutes():
     assert future_vwap(record,at+timedelta(minutes=2))['value'] is None
     record['raw']={k:v[:1]+v[2:] for k,v in record['raw'].items()}
     assert future_vwap(record,at)['value'] is None
+
+
+def test_missing_entire_regular_session_resets_but_documented_weekend_does_not():
+    rows=candles(375)
+    monday=[{**r,'timestamp':r['timestamp']+4*86400} for r in candles(20)]
+    # Thursday -> Monday omits Friday, so no overnight EMA may bridge it.
+    missing=calc(rows+monday,at=START+timedelta(days=4,minutes=20))
+    assert missing['snapshot']['consecutive_bars']==20 and missing['snapshot']['ema50'] is None
+    friday=[{**r,'timestamp':r['timestamp']+86400} for r in candles(375)]
+    weekend=calc(friday+monday,at=START+timedelta(days=4,minutes=20))
+    assert weekend['snapshot']['consecutive_bars']==395
+
+
+def test_documented_holiday_minutes_cannot_enter_indicators():
+    holiday=[{**r,'timestamp':r['timestamp']-2*86400} for r in candles(60)]
+    pack=build(holiday,START-timedelta(days=2)+timedelta(minutes=60))
+    assert pack['excluded']==60 and pack['frames']['1']['snapshot']['bars']==0
