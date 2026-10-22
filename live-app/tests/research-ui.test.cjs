@@ -226,3 +226,15 @@ test('live chart ticks reuse timezone formatters over a large retained history a
   await e.context.window.thetaSessionRefresh();
   assert.equal(e.chartCalls.at(-1).last.close,111);
 });
+
+ test('chart and indicator cards consume backend series rather than browser EMA or a retained session',async()=>{
+  const time=Date.parse('2026-10-22T03:45:00Z')/1000;
+  const bars=[{time,open:100,high:102,low:99,close:101}],ema20=[{time,value:88.123}],ema50=[{time,value:87.321}];
+  const frame={bars,ema20,ema50,rsi14:[{time,value:62}],adx14:[{time,value:31}],snapshot:{ema20:88.123,ema50:87.321,rsi14:62,adx14:31,consecutive_bars:60,state:'CALCULATED'}};
+  const e=environment('research',{indicator_chart:{version:'closed-candle-1.0',clock:'2026-10-22T04:00:00Z',frames:{'5':frame},levels:[],orb:{state:'COMPLETE',date:'2026-10-22',high:102,low:99},loadedDay:'2026-10-22',excluded:0,conflicts:0},history:{candles:[]},candle_freshness:{state:'STALE'}});
+  await e.flush();const chart=e.chartCalls.at(-1);
+  assert.deepEqual(JSON.parse(JSON.stringify(chart.ema20)),ema20);assert.deepEqual(JSON.parse(JSON.stringify(chart.rsi14)),frame.rsi14);assert.deepEqual(JSON.parse(JSON.stringify(chart.bars)),bars);
+  assert.match(e.element('research-indicator-values').innerHTML,/HISTORICAL \/ STALE/);
+  assert.match(e.element('research-indicator-values').innerHTML,/88.123|88.12/);
+  assert.match(e.element('research-indicator-values').innerHTML,/RSI14/);
+ });

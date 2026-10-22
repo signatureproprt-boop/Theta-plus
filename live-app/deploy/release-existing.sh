@@ -102,7 +102,7 @@ for name in ('dashboard.js','dashboard.css','research.js','terminal.js','researc
         observed=sha256(response.read()).hexdigest()
     if observed!=expected:raise RuntimeError('Dashboard asset mismatch: '+name)
 with urlopen(url+'/',timeout=30) as response:html=response.read().decode()
-if 'dashboard.js?v=3.8.1' not in html or 'dashboard.css?v=3.8.3' not in html:
+if 'dashboard.js?v=3.8.1' not in html or 'dashboard.css?v=3.8.5' not in html:
     raise RuntimeError('Dashboard assets not referenced by serving HTML')
 print('Dashboard HTML and exact source assets verified.')
 PYDASHBOARD
