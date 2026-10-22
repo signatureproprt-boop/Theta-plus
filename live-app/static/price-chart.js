@@ -32,7 +32,7 @@
       const rsi=chart.addSeries(L.LineSeries,{title:'RSI14',color:'#7755b5',lineWidth:1,priceLineVisible:false,priceFormat:{type:'price',precision:2,minMove:.01},autoscaleInfoProvider:()=>({priceRange:{minValue:0,maxValue:100}})},1);
       const adx=chart.addSeries(L.LineSeries,{title:'ADX14',color:'#087f85',lineWidth:1,priceLineVisible:false,priceFormat:{type:'price',precision:2,minMove:.01},autoscaleInfoProvider:()=>({priceRange:{minValue:0,maxValue:100}})},2);
       for(const value of [30,70])rsi.createPriceLine({price:value,title:String(value),color:'#b9accf',lineWidth:1,lineStyle:L.LineStyle.Dashed,axisLabelVisible:false});
-      chart.panes?.()[1]?.setHeight(95);chart.panes?.()[2]?.setHeight(95);
+      chart.panes?.().forEach((pane,index)=>pane.setStretchFactor(index===0?3:1));
       const root=element.closest('.room-chart'),resize=()=>{if(!view||view.element!==element)return;chart.applyOptions({autoSize:true});};
       const applyExpanded=()=>{root?.classList.toggle('chart-expanded',expanded);const button=document.getElementById('chart-fullscreen');if(button){button.textContent=expanded?'Exit fullscreen':'Fullscreen';button.setAttribute('aria-pressed',String(expanded));}};
       const fullscreenChanged=()=>{if(!document.fullscreenElement)expanded=false;applyExpanded();resize();};
