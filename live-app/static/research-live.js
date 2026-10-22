@@ -6,7 +6,19 @@
   let active=false,controller=null,generation=0,symbol='nifty',state='Disconnected',rows=new Map(),points=[],lastFrame=0,retries=0,connected=false,stalled=false,retryDelay=2500,busySince=0;
   function text(message){state=message;if(node('research-live-state'))node('research-live-state').textContent=message;}
   function currentTrade(r){const at=Date.parse(r.trade_at);const age=Date.now()-at;const receiptAge=Date.now()-Date.parse(r.received_at);return active&&connected&&Number.isFinite(at)&&age>=0&&age<=10000&&receiptAge>=0&&receiptAge<=10000&&r.trade_state==='RECENT_TRADE';}
+  let paintTimer=null,pendingTicks=new Map(),pendingUnderlying=null;
+  // Keep every observation in the stream state, but paint at most ten times a second.
+  // Coalesce by exact identity so a busy contract cannot hide another contract's update.
+  function cancelPaint(){if(paintTimer!==null)clearTimeout(paintTimer);paintTimer=null;}
+  function schedulePaint(){if(paintTimer===null)paintTimer=setTimeout(()=>{paintTimer=null;render();},100);}
   function render(){
+    cancelPaint();
+    const ticks=[...pendingTicks.values()],underlying=pendingUnderlying;
+    pendingTicks.clear();pendingUnderlying=null;
+    if(active&&ticks.length){
+      if(underlying&&currentTrade(underlying))window.thetaResearchTick?.(underlying);
+      window.thetaResearchLiveBatch?.(ticks);window.thetaMarketLiveBatch?.(ticks);
+    }
     window.thetaResearchLiveState?.();window.thetaMarketLiveState?.();if(!node('research-live-prices'))return;
     node('research-live-state').textContent=state;
     node('research-live-start').disabled=active;node('research-live-stop').disabled=!active;
@@ -38,18 +50,16 @@
       text(data.state==='RENEW_CONNECTION'?'Renewing connection…':data.state);return;
     }
     if(data.type!=='batch')return;
-    for(const row of data.ticks||[]){rows.set(row.segment+':'+row.security_id,row);
+    for(const row of data.ticks||[]){const identity=row.segment+':'+row.security_id;rows.set(identity,row);pendingTicks.set(identity,row);
       if(row.role==='underlying'&&row.key===symbol&&currentTrade(row)){
         const at=Date.parse(row.trade_at),old=points.at(-1);
         if(!old||at>old.at)points.push({at,price:row.ltp});else if(at===old.at)old.price=row.ltp;
-        points=points.slice(-300);window.thetaResearchTick?.(row);
+        points=points.slice(-300);pendingUnderlying=row;
       }
     }
-    window.thetaResearchLiveBatch?.(data.ticks||[]);
-    window.thetaMarketLiveBatch?.(data.ticks||[]);
     if((data.ticks||[]).length){retries=0;text('Connected · received '+new Date(data.received_at).toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata'})+' IST');}
     else if(!rows.size)text('Connected · awaiting market ticks');
-    render();
+    schedulePaint();
   }
   async function connect(id){
     while(active&&generation===id){controller=new AbortController();connected=false;lastFrame=Date.now();try{
@@ -72,10 +82,10 @@
   window.thetaLiveStop=()=>{active=false;connected=false;generation++;controller?.abort();text('Disconnected · last observations retained, not live');render();};
   window.thetaLiveMount=()=>{
     if(!node('research-live-start'))return;
-    node('research-live-start').onclick=()=>{if(active)return;if(typeof window.thetaLiveStreamRequest!=='function'){text('Open Admin and Unlock Admin first.');render();return;}symbol=node('research-symbol')?.value||'nifty';rows=new Map();points=[];window.thetaResearchLiveReset?.();retries=0;busySince=0;retryDelay=2500;active=true;window.thetaSessionRefresh?.();lastFrame=Date.now();text('Connecting…');render();connect(++generation);};
+    node('research-live-start').onclick=()=>{if(active)return;if(typeof window.thetaLiveStreamRequest!=='function'){text('Open Admin and Unlock Admin first.');render();return;}symbol=node('research-symbol')?.value||'nifty';cancelPaint();pendingTicks.clear();pendingUnderlying=null;rows=new Map();points=[];window.thetaResearchLiveReset?.();retries=0;busySince=0;retryDelay=2500;active=true;window.thetaSessionRefresh?.();lastFrame=Date.now();text('Connecting…');render();connect(++generation);};
     node('research-live-stop').onclick=window.thetaLiveStop;render();
   };
   setInterval(()=>{if(active&&lastFrame&&Date.now()-lastFrame>(connected?15000:120000)){text('Feed stalled · reconnecting');stalled=true;lastFrame=Date.now();controller?.abort();}render();},2000);
-  window.addEventListener('beforeunload',()=>{controller?.abort();});
+  window.addEventListener('beforeunload',()=>{cancelPaint();controller?.abort();});
   window.addEventListener('resize',draw);window.thetaLiveMount();
 })();
