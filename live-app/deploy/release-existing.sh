@@ -96,7 +96,7 @@ from hashlib import sha256
 from urllib.request import urlopen
 import sys
 url=sys.argv[1]
-for name in ('dashboard.js','dashboard.css','research.js','terminal.js','research-live.js'):
+for name in ('dashboard.js','dashboard.css','research.js','terminal.js','research-live.js','chart-data.js','price-chart.js','vendor/lightweight-charts-5.2.1.js'):
     expected=sha256((Path('static')/name).read_bytes()).hexdigest()
     with urlopen(url+'/static/'+name+'?release=dashboard',timeout=30) as response:
         observed=sha256(response.read()).hexdigest()

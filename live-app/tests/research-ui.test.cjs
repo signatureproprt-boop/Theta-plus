@@ -5,15 +5,16 @@ const fs=require('node:fs');
 const path=require('node:path');
 
 function environment(page='options',snapshot={}){
-  const nodes=new Map(),calls=[];
+  const nodes=new Map(),calls=[],chartCalls=[];
   function element(id){if(!nodes.has(id)){let html='';const el={id,hidden:false,value:'',disabled:false,dataset:{},textContent:'',clientWidth:600,checked:true,
     setAttribute(){},addEventListener(t,fn){this['on'+t]=fn;},querySelector(){return element('submit');},reset(){},insertAdjacentHTML(_where,v){html+=v;}};
     Object.defineProperty(el,'innerHTML',{get:()=>html,set(v){html=v;}});nodes.set(id,el);}return nodes.get(id);}
   const data={server_time:'2026-10-19T07:00:00Z',history:{candles:[],invalid_record_ids:[],conflicting_minutes:0},chain:{status:'TIME_UNVERIFIED',contracts:[],pcr_oi:1.2,pcr_volume:1.4},setups:[],policies:{},availability:{},markets:{items:[]},...snapshot};
   const context={window:{addEventListener(){}},document:{getElementById:element,querySelectorAll(){return [];}},location:{hash:'#'+page},setInterval:()=>0,setTimeout:fn=>{fn();return 0;},Intl,Date,Number,String,Math,Set,Map,FormData:class{constructor(form){return Object.entries(form.fields||{});}},crypto:{randomUUID:()=> 'b'.repeat(32)},AbortSignal:{timeout:()=>undefined},console,fetch:async(url,o={})=>{calls.push({url,o});return {ok:true,status:200,text:async()=>JSON.stringify(url.includes('journal')?{entries:[],next_cursor:null}:data),json:async()=>url.includes('journal')?{entries:[],next_cursor:null}:data};}};
-  vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/api-response.js'),'utf8'),context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/research.js'),'utf8'),context);
+  context.window.thetaChartRender=(_element,model)=>chartCalls.push(model);context.window.thetaChartDispose=()=>{};context.window.thetaChartLive=()=>{};
+  vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/chart-data.js'),'utf8'),context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/api-response.js'),'utf8'),context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/research.js'),'utf8'),context);
   async function flush(){for(let i=0;i<5;i++)await new Promise(resolve=>setImmediate(resolve));}
-  return {context,element,calls,flush,data};
+  return {context,element,calls,flush,data,chartCalls};
 }
 
 test('options screen labels snapshot PCR and unverified history without polling provider',async()=>{
@@ -25,7 +26,7 @@ test('options screen labels snapshot PCR and unverified history without polling 
 });
 test('missing data still renders research chart and unavailable message',async()=>{
   const e=environment('research');await e.flush();
-  assert.match(e.element('research-chart-readout').textContent,/No complete bars/);
+  assert.equal(e.chartCalls.at(-1).last,undefined);
   assert.match(e.element('page-research').innerHTML,/Saved-data freshness above/);
 });
 test('session refresh replaces today bars, excludes older today snapshots, and retains gap labels',async()=>{
@@ -38,7 +39,7 @@ test('session refresh replaces today bars, excludes older today snapshots, and r
   assert.match(e.element('research-session-state').textContent,/2\/3 closed minutes · 1 gaps/);
   e.context.document.querySelectorAll=()=>[];
   // Five-minute bucket is intentionally incomplete, so it must remain absent.
-  assert.match(e.element('research-chart-readout').textContent,/No complete bars/);
+  assert.equal(e.chartCalls.at(-1).last,undefined);
   e.context.window.thetaResearchShow('options');
   e.context.window.thetaResearchShow('research');
   assert.match(e.element('page-research').innerHTML,/2\/3 closed minutes/);
@@ -47,10 +48,10 @@ test('complete provider bars render without deriving OHLC from live LTP',async()
   const t=Date.parse('2026-10-19T03:45:00Z')/1000;
   const candles=Array.from({length:5},(_,i)=>({timestamp:t+i*60,open:100,high:102,low:99,close:101,volume:0}));
   const e=environment('research',{history:{candles}});await e.flush();
-  assert.match(e.element('research-chart').innerHTML,/O 100 H 102 L 99 C 101/);
-  assert.match(e.element('research-chart-readout').textContent,/Historical/);
+  assert.deepEqual(JSON.parse(JSON.stringify(e.chartCalls.at(-1).bars.filter(r=>r.close!==undefined).at(-1))),{time:t,open:100,high:102,low:99,close:101});
+  assert.equal(e.chartCalls.at(-1).source,'Historical');
   e.context.window.thetaResearchTick({key:'nifty',ltp:999,trade_at:new Date().toISOString()});
-  assert.match(e.element('research-chart').innerHTML,/O 100 H 102 L 99 C 101/);
+  assert.deepEqual(JSON.parse(JSON.stringify(e.chartCalls.at(-1).bars.filter(r=>r.close!==undefined).at(-1))),{time:t,open:100,high:102,low:99,close:101});
 });
 test('backend chain strings cannot inject markup',async()=>{
   const e=environment('options',{chain:{status:'<script>bad</script>',contracts:[]}});await e.flush();
@@ -219,9 +220,9 @@ test('live chart ticks reuse timezone formatters over a large retained history a
   e.context.window.thetaLiveIsActive=()=>true;
   for(let i=0;i<20;i++)e.context.window.thetaResearchTick({key:'nifty',ltp:101+i/100,trade_at:new Date().toISOString()});
   assert.equal(constructors,0,'live ticks must not build formatters for each historical minute');
-  assert.match(e.element('research-chart').innerHTML,/O 100 H 102 L 99 C 101/);
+  assert.equal(e.chartCalls.at(-1).last.close,101);
   const latest=start+19*86400;
   e.context.window.thetaAdminRequest=async()=>({session_date:'2026-10-20',candles:Array.from({length:5},(_,i)=>({timestamp:latest+i*60,open:110,high:112,low:109,close:111})),expected_minutes:5,missing_minutes:0,freshness:{state:'STALE'},received_at:new Date().toISOString()});
   await e.context.window.thetaSessionRefresh();
-  assert.match(e.element('research-chart').innerHTML,/O 110 H 112 L 109 C 111/);
+  assert.equal(e.chartCalls.at(-1).last.close,111);
 });
