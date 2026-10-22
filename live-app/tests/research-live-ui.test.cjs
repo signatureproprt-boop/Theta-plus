@@ -8,7 +8,7 @@ function environment(messages,authorized=true){
   const nodes=new Map(),calls=[],timers=[],timeouts=[];
   function node(id){if(!nodes.has(id))nodes.set(id,{id,value:id==='research-symbol'?'nifty':'',textContent:'',innerHTML:'',hidden:false,disabled:false,clientWidth:600,style:{},setAttribute(){}});return nodes.get(id);}
   const text=messages.map(x=>'data: '+JSON.stringify(x)+'\n\n').join('');const encoded=new TextEncoder().encode(text);let read=0;
-  const context={document:{getElementById:node},window:{addEventListener(){}},AbortController,TextDecoder,Date,Number,Math,String,Map,Set,console,setInterval:fn=>timers.push(fn),setTimeout:(fn,ms)=>{timeouts.push({fn,ms});return timeouts.length;}};
+  const context={document:{getElementById:node},window:{addEventListener(){}},AbortController,TextDecoder,Date,Number,Math,String,Map,Set,console,setInterval:fn=>timers.push(fn),setTimeout:(fn,ms)=>{timeouts.push({fn,ms});return timeouts.length;},clearTimeout:id=>{if(timeouts[id-1])timeouts[id-1].cancelled=true;}};
   if(authorized)context.window.thetaLiveStreamRequest=async(symbol,signal)=>{calls.push({symbol,signal});return {ok:true,body:{getReader:()=>({read:async()=>read++===0?{value:encoded.slice(0,17),done:false}:read===2?{value:encoded.slice(17),done:false}:{done:true},cancel:async()=>{}})}};};
   vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/api-response.js'),'utf8'),context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/research-live.js'),'utf8'),context);
   return {context,node,calls,timers,timeouts,flush:async()=>{for(let i=0;i<5;i++)await new Promise(resolve=>setImmediate(resolve));}};
@@ -75,4 +75,32 @@ test('plain-text authorization rejection stops without reconnecting',async()=>{
   const e=environment([]);e.context.window.thetaLiveStreamRequest=async()=>({ok:false,status:403,text:async()=> 'access denied'});
   e.node('research-live-start').onclick();await e.flush();
   assert.equal(e.context.window.thetaLiveIsActive(),false);assert.equal(e.timeouts.length,0);
+});
+
+test('burst paints are bounded and preserve latest observations for each identity',async()=>{
+  const e=environment([]),at=new Date().toISOString();let step=0;
+  const ticks=Array.from({length:100},(_,i)=>({type:'batch',received_at:at,ticks:[
+    {key:'nifty',segment:'IDX_I',security_id:'13',role:'underlying',label:'NIFTY',ltp:25000+i,trade_at:at,received_at:at,trade_state:'RECENT_TRADE'},
+    {segment:'NSE_FNO',security_id:String(i%2),role:'option',strike:25000,side:'CALL',ltp:100+i}
+  ]}));
+  const wire=new TextEncoder().encode([{type:'status',state:'CONNECTED_AWAITING_TICKS'},...ticks].map(x=>'data: '+JSON.stringify(x)+'\n\n').join(''));
+  e.context.window.thetaLiveStreamRequest=async()=>({ok:true,body:{getReader:()=>({
+    read:()=>step++===0?Promise.resolve({done:false,value:wire}):new Promise(()=>{}),cancel:async()=>{}
+  })}});
+  const batches=[],market=[],charts=[];
+  e.context.window.thetaResearchLiveBatch=rows=>batches.push(rows);
+  e.context.window.thetaMarketLiveBatch=rows=>market.push(rows);
+  e.context.window.thetaResearchTick=row=>charts.push(row);
+  e.node('research-live-start').onclick();await e.flush();
+  const paints=e.timeouts.filter(t=>t.ms===100&&!t.cancelled);
+  assert.equal(paints.length,1);assert.equal(batches.length,0);
+  paints[0].fn();
+  assert.equal(batches.length,1);assert.equal(market.length,1);assert.equal(charts.length,1);
+  assert.equal(batches[0].length,3);assert.equal(charts[0].ltp,25099);
+  assert.equal(batches[0].find(r=>r.security_id==='0').ltp,198);
+  assert.equal(batches[0].find(r=>r.security_id==='1').ltp,199);
+  assert.match(e.node('research-live-prices').innerHTML,/25,099/);
+  e.context.window.thetaLiveStop();
+  assert.equal(e.node('research-live-stop').disabled,true);
+  assert.match(e.node('research-live-state').textContent,/not live/);
 });
