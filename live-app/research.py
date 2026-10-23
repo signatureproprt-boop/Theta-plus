@@ -410,6 +410,7 @@ def replay_report(store,p):
             'latest':setup_rules(visible,p.clock,p.setup,p.config,pattern_asof_close=True)}
 
 def workspace(store,symbol,clock=None,options=None,contract_id=''):
+    validation_clock=clock  # Explicit historical/test clocks stay fixed.
     clock=clock or datetime.now(timezone.utc);loaded=saved_candles(store,symbol,clock)
     candles=loaded['candles'];latest=candles[-1] if candles else None
     records=store.rows('dhan_chain',40)
@@ -443,7 +444,7 @@ def workspace(store,symbol,clock=None,options=None,contract_id=''):
         {'item':'Paper validation','state':'ACTUAL_FORWARD_TRADES_REQUIRED','next':'50+ verified forward paper trades across regimes; manual hypothetical entries do not certify accuracy.'},
     ]
     from data_validator import report,gate
-    validation=report(store,clock,symbol)
+    validation=report(store,validation_clock,symbol)
     setups=gate([setup_rules(candles,clock,s,contract=contract,breadth=breadth,indicator_view=indicator_view) for s in ('opening_range','trend_pullback')],validation)
     return {'readiness':readiness,'data_validator':validation,'futures_context':futures,'symbol':symbol,'server_time':clock.isoformat(),'mode':'READ_ONLY_RESEARCH','rule_version':RULE_VERSION,
             'session_quality':session_quality,

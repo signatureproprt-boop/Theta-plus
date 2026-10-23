@@ -130,3 +130,16 @@ def test_validator_endpoint_is_read_only_and_rejects_unknown_symbol(tmp_path,mon
 def test_malformed_chain_is_a_blocked_report_not_an_exception(raw):
     record=chain_record();record['raw']=raw
     assert chain(record,'nifty',CLOCK)[0]['state']=='BLOCKED'
+
+def test_live_validation_clock_is_captured_after_concurrent_reads(tmp_path,monkeypatch):
+    import data_validator
+    store=Store(tmp_path/'s.db');reads=[]
+    class Reading:
+        def document(self,key):reads.append(key);return store.document(key)
+    class Clock(datetime):
+        @classmethod
+        def now(cls,tz=None):
+            assert len(reads)==10  # worker/control/plan, four feeds, session/future/chain
+            return CLOCK
+    monkeypatch.setattr(data_validator,'datetime',Clock)
+    assert report(Reading(),symbol='nifty')['checked_at']==CLOCK.isoformat()

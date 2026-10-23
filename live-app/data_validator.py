@@ -89,7 +89,6 @@ def chain(record,symbol,clock):
                   'Exchange quote time required. Server receipt / last-trade time is not substituted.',exchange_at=meta.get('exchange_at'))]
 
 def report(store,clock=None,symbol=None):
-    clock=clock or datetime.now(timezone.utc)
     symbols=[symbol] if symbol else ['nifty','banknifty','india_vix']
     keys=['control/worker','control/data-system','system/subscription-plan']
     keys+=['system/recorder/'+f for f in ('live','live-extra','depth20','depth200')]
@@ -98,6 +97,9 @@ def report(store,clock=None,symbol=None):
     keys+=['research/current-chain/'+s for s in symbols if s!='india_vix']
     with ThreadPoolExecutor(max_workers=8) as pool:documents=dict(zip(keys,pool.map(lambda k:store.document(k)[0] or {},keys)))
     documents={k:v if isinstance(v,dict) else {'invalid_document':True} for k,v in documents.items()}
+    # Recorders can flush while these reads are in progress. A timestamp
+    # newer than request-start is not in the future at validation time.
+    clock=clock or datetime.now(timezone.utc)
     worker=documents['control/worker'];plan=documents['system/subscription-plan']
     from build_identity import runtime_build
     worker_age=age(worker.get('heartbeat'),clock)
