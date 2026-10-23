@@ -133,3 +133,14 @@ def test_release_acceptance_requires_matching_running_build(monkeypatch,tmp_path
     sleeps=[]
     assert module.verify(lambda:next(responses),sleeps.append,attempts=3)
     assert sleeps==[5,5]
+
+
+def test_public_progress_omits_protected_diagnostic_details(tmp_path):
+    from data_system import status
+    s=Store(tmp_path/'s.db')
+    s.put_document('doctor/current',{'state':'SCANNING','phase':'inventory','inspected':{'documents':123},
+        'scan_errors':0,'checks':[{'evidence':'private-check-marker'}],
+        'examples':[{'key':'private-record-marker'}],'findings':{'private-detail-marker':1}},0)
+    q=status(s,datetime(2026,10,23,2,tzinfo=timezone.utc))['doctor_progress']
+    assert q['state']=='SCANNING' and q['inspected']=={'documents':123}
+    assert 'checks' not in q and 'examples' not in q and 'findings' not in q

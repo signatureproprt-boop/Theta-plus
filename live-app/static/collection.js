@@ -62,6 +62,7 @@
       const outcomes=Object.entries(data.audit?.job_groups||{}).map(([name,r])=>`<tr><td>${esc(name)}</td><td>${esc(JSON.stringify(r.states))}</td><td>${esc(JSON.stringify(r.attempt_outcomes))}</td></tr>`).join('');
       $('#data-system-status').innerHTML=`<p><b>${data.enabled?'Enabled':'Paused / not enabled'}</b> · Worker: ${data.worker_active?'Active':'Not active'} · Maintenance: ${esc(data.maintenance?.state||'Not started')} · NSE session: ${esc(data.calendar?.state||'Unverified')}</p>
         <p role="status">Collector release: ${data.worker_build_matches?'Matches serving app':'Not verified / older execution; release activation required'}</p>
+        <p>System scan: ${esc(data.doctor_progress?.state||'Not started')} · Phase: ${esc(data.doctor_progress?.phase||'—')} · Records inspected: ${esc(Object.values(data.doctor_progress?.inspected||{}).reduce((sum,n)=>sum+(Number(n)||0),0))} · Scan errors: ${esc(data.doctor_progress?.scan_errors??0)} · Updated: ${esc(data.doctor_progress?.updated_at||'—')}. Detailed findings require Admin; scan progress does not certify full data coverage.</p>
         ${data.scope_warning?'<p role="status">'+esc(data.scope_warning)+'</p>':''}
         <p>Recent internal diagnostics: ${esc(data.diagnostics?.total??0)} · ${esc((data.diagnostics?.items||[]).slice(0,3).map(r=>r.stage+': '+r.exception_type+' ['+r.id+']').join(' · '))}</p>
         <p>${esc(data.scope||'Subscription scope has not been prepared.')} · Live capacity excluded: ${esc(data.live_capacity_excluded??'Not assessed')}.</p>

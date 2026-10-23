@@ -371,6 +371,10 @@ def status(store,clock=None):
     from build_identity import runtime_build
     clock=clock or now();config=store.document(CONTROL)[0] or {};plan=store.document(SCOPE)[0] or {}
     worker=store.document('control/worker')[0] or {}
+    doctor=store.document('doctor/current')[0] or {}
+    # Public progress counters contain no Admin checks, raw records or findings
+    # details. The detailed diagnostic report keeps its existing Admin gate.
+    doctor_progress={k:doctor.get(k) for k in ('state','phase','started_at','updated_at','inspected','scan_errors')}
     lease_held=worker.get('until',0)>clock.timestamp()
     try:worker_age=(clock-datetime.fromisoformat(worker.get('heartbeat'))).total_seconds()
     except (TypeError,ValueError):worker_age=None
@@ -395,6 +399,7 @@ def status(store,clock=None):
             'worker_active':active,'worker_lease_held':lease_held,'worker_heartbeat':worker.get('heartbeat'),
             'worker_build_id':worker.get('build_id'),'expected_worker_build_id':runtime_build(),
             'worker_build_matches':worker.get('build_id')==runtime_build(),
+            'doctor_progress':doctor_progress,
             'subscribed':{k:len(v) for k,v in plan.get('scopes',{}).items()},
             'live_capacity_excluded':plan.get('live_capacity_excluded'),'all_market_continuous':False,
             'depth20_unsubscribed':plan.get('depth20_unsubscribed'),'depth20_scope':plan.get('depth20_scope'),
