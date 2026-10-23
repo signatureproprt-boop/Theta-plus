@@ -253,3 +253,14 @@ test('verified-range repair is offered only after a provider-confirmed diagnosti
  assert.match(e.element('collection-feedback').innerHTML,/Prepare verified-range retry/);
  assert.equal(e.calls.filter(([url])=>url.endsWith('/repair')).length,0);
 });
+
+test('segment support check uses Admin and labels the unchanged catalogue',async()=>{
+ const e=environment('completed',{responses:{'/api/collection/profile/check':{ok:true,status:200,text:async()=>JSON.stringify({data_plan:'Active',active_segments:'E, D, M',data_validity_reported:'2026-11-07',unmapped_commodity_check:{state:'PROVIDER_REJECTED',mapping_changed:false}})}}});
+ await e.flush();e.element('token-admin-password').value='fixture-admin';await e.click('admin-signin');
+ await e.click('collection-profile');
+ const request=e.calls.find(([url])=>url==='/api/collection/profile/check');
+ assert.equal(request[1].headers['X-Theta-Admin-Password'],'fixture-admin');
+ assert.match(e.element('collection-feedback').textContent,/NSE commodity sample: PROVIDER_REJECTED/);
+ assert.match(e.element('collection-feedback').textContent,/Catalogue mapping unchanged/);
+ assert.equal(e.calls.filter(([url])=>url.endsWith('/catalogue/refresh')).length,0);
+});

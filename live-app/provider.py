@@ -22,8 +22,9 @@ class ProviderError(Exception):
 
 class DataSession(requests.Session):
     """Bound SDK requests, block redirects and sanitize errors before SDK logging."""
-    def __init__(self, timeout):
+    def __init__(self, timeout, *, commodity_probe=False):
         super().__init__()
+        self.commodity_probe=commodity_probe
         self.read_timeout=timeout
         self.status=None
         self.failure=None
@@ -31,14 +32,23 @@ class DataSession(requests.Session):
     def request(self, method, url, **kwargs):
         if method.upper()!='POST' or url not in {'https://api.dhan.co/v2/'+p for p in DATA_PATHS}:
             self.failure='ENDPOINT';raise RuntimeError('Only approved Dhan data endpoints are enabled')
+        if self.commodity_probe and url!='https://api.dhan.co/v2/marketfeed/quote':
+            self.failure='ENDPOINT';raise RuntimeError('Only a bounded commodity quote probe is enabled')
         # SDK 2.3 injects dhanClientId into every body. Quote endpoints accept
         # a segment -> ID-list map; client identity belongs in the headers.
         # Keep using the official SDK, correcting only this wire contract.
         if url.rsplit('/',1)[-1] in ('quote','ohlc','ltp') and '/marketfeed/' in url:
             payload=json.loads(kwargs.get('data') or '{}')
             if isinstance(payload,dict):payload.pop('dhanClientId',None)
+            segments={'IDX_I','NSE_EQ','BSE_EQ','NSE_FNO','BSE_FNO','NSE_CURRENCY','BSE_CURRENCY','MCX_COMM'}
+            if self.commodity_probe:
+                if (url!='https://api.dhan.co/v2/marketfeed/quote' or not isinstance(payload,dict) or
+                        set(payload)!={'NSE_COMM'} or not isinstance(payload['NSE_COMM'],list) or
+                        not 1<=len(payload['NSE_COMM'])<=2):
+                    self.failure='PAYLOAD';raise RuntimeError('Invalid bounded commodity support probe')
+                segments={'NSE_COMM'}
             if (not isinstance(payload,dict) or not payload or
-                any(k not in {'IDX_I','NSE_EQ','BSE_EQ','NSE_FNO','BSE_FNO','NSE_CURRENCY','BSE_CURRENCY','MCX_COMM'} or
+                any(k not in segments or
                     not isinstance(v,list) or not v or any(isinstance(i,bool) or not isinstance(i,int) or i<0 for i in v)
                     for k,v in payload.items()) or sum(map(len,payload.values()))>1000):
                 self.failure='PAYLOAD';raise RuntimeError('Invalid market quote segment/ID payload')
@@ -100,12 +110,12 @@ class Dhan:
         return {'library':'dhanhq','version':SDK_VERSION,'rest':sorted(DATA_PATHS),
                 'feeds':['live','depth20','depth200'],'execution':'NO_BROKER_EXECUTION'}
 
-    def _request(self,path,body):
+    def _request(self,path,body,commodity_probe=False):
         token=self.credentials.token();client_id=self.credentials.client_id
         context=DhanContext(client_id,token)
         http=context.get_dhan_http()
         http.session.close()
-        session=DataSession(60 if path.startswith('charts/') else 20)
+        session=DataSession(60 if path.startswith('charts/') else 20,commodity_probe=commodity_probe)
         http.session=session
         try:
             result=sdk_request(dhanhq(context),path,copy.deepcopy(body))
@@ -138,8 +148,15 @@ class Dhan:
         detail=re.sub(r'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+','[redacted]',detail)
         return ' '.join(detail.split())[:300]
 
-    async def post(self,path,body):
+    async def probe_commodity_quotes(self,security_ids):
+        if (not isinstance(security_ids,list) or not 1<=len(security_ids)<=2 or
+                any(isinstance(sid,bool) or not isinstance(sid,int) or sid<=0 for sid in security_ids)):
+            raise ProviderError('Choose at most two pinned commodity identities',code='PAYLOAD')
+        return await self.post('marketfeed/quote',{'NSE_COMM':security_ids},_commodity_probe=True)
+
+    async def post(self,path,body,*,_commodity_probe=False):
         if path not in DATA_PATHS:raise ProviderError('Only Dhan market-data methods are enabled',code='ENDPOINT')
+        if _commodity_probe and path!='marketfeed/quote':raise ProviderError('Invalid commodity support endpoint',code='ENDPOINT')
         if not await asyncio.to_thread(lambda:self.configured):raise ProviderError('Dhan credentials are not configured on the server',code='DH-901',status=401)
         async with self.lock:
             if self.store:
@@ -148,6 +165,8 @@ class Dhan:
             wait=3.1-(time.monotonic()-self.last)
             if wait>0:await asyncio.sleep(wait)
             self.last=time.monotonic()
-            try:return await asyncio.to_thread(self._request,path,body)
+            try:
+                if _commodity_probe:return await asyncio.to_thread(self._request,path,body,commodity_probe=True)
+                return await asyncio.to_thread(self._request,path,body)
             except CredentialError:raise ProviderError('Dhan credentials unavailable',code='DH-901',status=401) from None
             except (KeyError,TypeError,ValueError):raise ProviderError('Invalid Dhan data request or response') from None

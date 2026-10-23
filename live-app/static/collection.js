@@ -153,7 +153,7 @@
       }
       if (b.id==='data-system-refresh')await refreshDataSystem();
       if (b.id==='catalogue-refresh') {feedback('Fetching full catalogue. Please keep this page open.'); await write('catalogue/refresh'); await refresh(); feedback('Catalogue saved.');}
-      if (b.id==='collection-profile') {const profile=await write('profile/check');feedback('Data plan: '+profile.data_plan+' · Active segments: '+(profile.active_segments || 'Not reported')+' · Valid until: '+profile.data_validity_reported);}
+      if (b.id==='collection-profile') {feedback('Checking subscription and bounded NSE commodity support…');const profile=await write('profile/check');const probe=profile.unmapped_commodity_check;feedback('Data plan: '+profile.data_plan+' · Active segments: '+(profile.active_segments || 'Not reported')+' · Valid until: '+profile.data_validity_reported+(probe?' · NSE commodity sample: '+probe.state+' · Catalogue mapping unchanged.':''));}
       if (b.id==='collection-skip') {running=false;if(active){const job=await write('jobs/'+active+'/'+(b.dataset.action||'skip-blocked'));showJob(job);feedback(job.message+' Press Resume selected job to start the worker.');}}
       if (b.id==='collection-refresh') await refresh();
       if (b.id==='collection-more') await refresh(true);

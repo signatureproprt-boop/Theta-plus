@@ -202,7 +202,15 @@ def create_app(db_path=None):
         except CredentialError:raise HTTPException(503,'Dhan credentials unavailable') from None
         result['checked_at']=datetime.now(timezone.utc).isoformat()
         store.add('credential_status',result)
-        return result
+        from segment_probe import check
+        try:probe=await check(collector)
+        except Exception:probe={'state':'PROBE_UNAVAILABLE','mapping_changed':False}
+        return {**result,'unmapped_commodity_check':probe}
+
+    @app.get('/api/collection/catalogue/segment-probe')
+    def collection_segment_probe_report():
+        from segment_probe import public_report
+        return public_report(store)
 
     @app.get('/api/collection/catalogue')
     def collection_catalogue():
