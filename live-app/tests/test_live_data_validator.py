@@ -139,7 +139,7 @@ def test_live_validation_clock_is_captured_after_concurrent_reads(tmp_path,monke
     class Clock(datetime):
         @classmethod
         def now(cls,tz=None):
-            assert len(reads)==10  # worker/control/plan, four feeds, session/future/chain
+            assert len(reads)==12  # worker/control/plan, six feeds, session/future/chain
             return CLOCK
     monkeypatch.setattr(data_validator,'datetime',Clock)
     assert report(Reading(),symbol='nifty')['checked_at']==CLOCK.isoformat()

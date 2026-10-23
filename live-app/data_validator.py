@@ -91,7 +91,7 @@ def chain(record,symbol,clock):
 def report(store,clock=None,symbol=None):
     symbols=[symbol] if symbol else ['nifty','banknifty','india_vix']
     keys=['control/worker','control/data-system','system/subscription-plan']
-    keys+=['system/recorder/'+f for f in ('live','live-extra','depth20','depth200')]
+    keys+=['system/recorder/'+f for f in ('live','live-extra','live-3','live-4','depth20','depth200')]
     keys+=['research/session/'+s for s in symbols]
     keys+=['research/future/'+s for s in symbols if s!='india_vix']
     keys+=['research/current-chain/'+s for s in symbols if s!='india_vix']
@@ -110,8 +110,11 @@ def report(store,clock=None,symbol=None):
     checks.append(check('NSE regular session','PASS' if is_open else 'CLOSED','Only documented NSE regular sessions certify this validator. Other exchanges require their own calendars.'))
     scopes=plan.get('scopes');scopes=scopes if isinstance(scopes,dict) else {}
     scopes={k:v if isinstance(v,list) else [] for k,v in scopes.items()}
-    for family in ('live','live-extra','depth20','depth200'):
+    for family in ('live','live-extra','live-3','live-4','depth20','depth200'):
         record=documents['system/recorder/'+family];scope=scopes.get(family,[])
+        if family in ('live-extra','live-3','live-4') and not scope:
+            checks.append(check(family+' durable feed','NOT_SUBSCRIBED','No instruments assigned to this optional recorder shard; no live coverage claimed.'))
+            continue
         receipt_age=age(record.get('last_durable_received_at'),clock);heartbeat_age=age(record.get('heartbeat'),clock)
         valid=bool(scope) and record.get('state')=='RECORDING' and receipt_age is not None and 0<=receipt_age<=30 and heartbeat_age is not None and 0<=heartbeat_age<=90
         revisions=plan.get('feed_revisions');revisions=revisions if isinstance(revisions,dict) else {}

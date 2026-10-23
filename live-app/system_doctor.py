@@ -27,7 +27,7 @@ ROOT=Path(__file__).parent
 STATES={'VERIFIED','ISSUE','NOT_VERIFIED','UNAVAILABLE','REPAIRING'}
 AREAS=('application','security','credentials','catalogue','live','history','worker','storage','daily','consistency')
 NAMESPACES=('documents','records','journal')
-LIMITS={'live':5000,'live-extra':5000,'depth20':50,'depth200':1}
+LIMITS={'live':5000,'live-extra':5000,'live-3':5000,'live-4':5000,'depth20':50,'depth200':1}
 
 
 def now():return datetime.now(timezone.utc)

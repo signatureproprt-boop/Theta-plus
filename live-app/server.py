@@ -19,6 +19,7 @@ from token_check import check_token
 from research_audit import audit_historical
 from dhan_data import fetch_history,fetch_chain,verify_record
 from collection import Collector,CollectionPlan
+from instrument_directory import InstrumentDirectory
 from history_coverage import coverage_report
 from worker import launch_worker,worker_status
 from research import workspace, risk_plan, RiskInput, PaperNote, ReplayInput, replay_report, RULE_VERSION
@@ -61,6 +62,16 @@ class DhanHistoryInput(Model):
 class DhanChainInput(Model):
     index: str
 
+class InstrumentSelection(Model):
+    key: str = Field(min_length=1,max_length=128)
+    catalogue_sha256: str = Field(pattern=r'^[a-f0-9]{64}$')
+
+class InstrumentHistoryInput(InstrumentSelection):
+    start: date
+    end: date
+    family: Literal['daily','intraday'] = 'intraday'
+    interval: Literal[1,5,15,25,60] = 1
+
 def create_app(db_path=None):
     public_workspace=os.environ.get('THETA_AUTH_MODE')=='public'
     bucket=os.environ.get('THETA_GCS_BUCKET')
@@ -77,6 +88,29 @@ def create_app(db_path=None):
     app.state.store=store
     collector=Collector(provider,store)
     app.state.collector=collector
+    directory=InstrumentDirectory(collector)
+    app.state.instrument_directory=directory
+
+    @app.get('/api/instruments')
+    def instruments(q:str='',segment:str='',page:int=0,active_only:bool=True):
+        return directory.search(q,segment,page,active_only)
+
+    @app.get('/api/instruments/recorded')
+    def instrument_recorded(key:str,catalogue_sha256:str):
+        return directory.recorded(key,catalogue_sha256)
+
+    @app.post('/api/instruments/quote')
+    async def instrument_quote(payload:InstrumentSelection,request:Request):
+        require_admin(request)
+        try:return await directory.quote(payload.key,payload.catalogue_sha256)
+        except ProviderError as exc:raise HTTPException(503,str(exc)) from None
+
+    @app.post('/api/instruments/history')
+    async def instrument_history(payload:InstrumentHistoryInput,request:Request):
+        require_admin(request)
+        try:return await directory.history(payload.key,payload.catalogue_sha256,payload.start,payload.end,payload.family,payload.interval)
+        except ProviderError as exc:raise HTTPException(503,str(exc)) from None
+
 
     @app.post('/api/research/live')
     async def research_live(payload:LiveInput,request:Request):
