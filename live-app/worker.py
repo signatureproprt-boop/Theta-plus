@@ -158,7 +158,7 @@ async def run_worker(collector,max_seconds=23*3600):
                         await asyncio.to_thread(pause_failed_job,store,jid,error)
                 except Exception as error:
                     await asyncio.to_thread(pause_failed_job,store,jid,error)
-            await asyncio.sleep(3.5)
+            await asyncio.sleep(1)
         else:state='checkpointed'
     except Exception as error:
         state='interrupted'

@@ -420,6 +420,7 @@ def status(store,clock=None):
     clock=clock or now();config=store.document(CONTROL)[0] or {};plan=store.document(SCOPE)[0] or {}
     worker=store.document('control/worker')[0] or {}
     doctor=store.document('doctor/current')[0] or {}
+    budget=store.document('control/provider-budget')[0] or {}
     # Public progress counters contain no Admin checks, raw records or findings
     # details. The detailed diagnostic report keeps its existing Admin gate.
     doctor_progress={k:doctor.get(k) for k in ('state','phase','started_at','updated_at','inspected','scan_errors')}
@@ -447,6 +448,9 @@ def status(store,clock=None):
             'worker_active':active,'worker_lease_held':lease_held,'worker_heartbeat':worker.get('heartbeat'),
             'worker_build_id':worker.get('build_id'),'expected_worker_build_id':runtime_build(),
             'worker_build_matches':worker.get('build_id')==runtime_build(),
+            'request_pacing':{'policy':budget.get('policy','legacy-shared'),
+                              'day':budget.get('day'),'attempts_reserved':budget.get('calls',0),
+                              'daily_guard':100000,'cooldown_until':budget.get('cooldown_until')},
             'doctor_progress':doctor_progress,
             'subscribed':{k:len(v) for k,v in plan.get('scopes',{}).items()},
             'live_capacity_excluded':plan.get('live_capacity_excluded'),'live_candidate_count':plan.get('live_candidate_count'),

@@ -521,14 +521,14 @@ class Collector:
         # Shared ledger serializes quota across jobs and Cloud Run instances.
         lease,_=await asyncio.to_thread(self.store.document,'control/lease')
         if lease.get('owner')!=owner:raise HTTPException(409,'Collector lease lost')
-        wait=lease.get('next_at',0)-time.time()
-        if wait>0:await asyncio.sleep(min(wait,3.2))
         today=datetime.now(IST).date().isoformat()
         def reserve(old):
             if old.get('owner')!=owner:raise HTTPException(409,'Collector lease lost')
             calls=old.get('calls',0) if old.get('day')==today else 0
             if calls>=100000:raise ProviderError('Daily API budget reached',code='BUDGET')
-            return {**old,'day':today,'calls':calls+1,'next_at':time.time()+3.2}
+            # The provider owns cross-instance endpoint pacing. Retain the
+            # collector's owner and daily guard without a second chain-rate wait.
+            return {**old,'day':today,'calls':calls+1,'next_at':time.time()}
         await asyncio.to_thread(replace,self.store,'control/lease',reserve)
         return await self.provider.post(path,body)
 

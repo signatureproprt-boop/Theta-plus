@@ -14,6 +14,11 @@ DATA_PATHS = {'charts/historical', 'charts/intraday', 'charts/rollingoption',
               'optionchain', 'optionchain/expirylist', 'marketfeed/ltp',
               'marketfeed/ohlc', 'marketfeed/quote'}
 
+def quota_family(path):
+    if path.startswith('marketfeed/'):return 'quote',1.1
+    if path.startswith('optionchain'):return 'chain',3.2
+    return 'history',0.25 # Four starts/sec, below the documented five/sec data limit.
+
 class ProviderError(Exception):
     def __init__(self, message, *, code=None, status=None):
         super().__init__(message)
@@ -89,18 +94,34 @@ class Dhan:
         self.credentials=credentials or DhanCredentials()
         self.store=store
 
-    def reserve(self):
+    def reserve(self,path):
         from collection import replace
         from datetime import datetime
         from runtime import IST
-        reservation={};today=datetime.now(IST).date().isoformat()
+        reservation={};today=datetime.now(IST).date().isoformat();family,spacing=quota_family(path)
         def change(old):
             old=old or {};calls=old.get('calls',0) if old.get('day')==today else 0
             if calls>=100000:raise ProviderError('Daily market-data request budget reached',code='BUDGET',status=429)
-            at=max(time.time(),old.get('next_at',0));reservation['at']=at
-            return {'day':today,'calls':calls+1,'next_at':at+3.2}
+            ts=time.time();families=dict(old.get('family_next_at') or {})
+            global_at=old.get('global_next_at',0) if old.get('policy')=='endpoint-starts-v1' else old.get('next_at',0)
+            at=max(ts,global_at,families.get(family,0),old.get('cooldown_until',0))
+            reservation.update(granted=at<=ts,at=at)
+            if at>ts:return old # Waiting/cancelled callers do not consume daily budget.
+            families[family]=ts+spacing
+            # Keep a conservative next_at for an older worker during rollout.
+            # Modern callers use global_next_at plus family-specific spacing.
+            return {**old,'day':today,'calls':calls+1,
+                    'next_at':max(old.get('next_at',0),ts+spacing),'global_next_at':ts+0.25,
+                    'family_next_at':families,'policy':'endpoint-starts-v1'}
         replace(self.store,'control/provider-budget',change)
-        return reservation['at']
+        return reservation
+
+    def rate_backoff(self):
+        from collection import replace
+        until=time.time()+60
+        replace(self.store,'control/provider-budget',lambda old:{**(old or {}),
+            'next_at':max((old or {}).get('next_at',0),until),
+            'cooldown_until':max((old or {}).get('cooldown_until',0),until)})
 
     @property
     def configured(self):return self.credentials.configured
@@ -160,13 +181,23 @@ class Dhan:
         if not await asyncio.to_thread(lambda:self.configured):raise ProviderError('Dhan credentials are not configured on the server',code='DH-901',status=401)
         async with self.lock:
             if self.store:
-                at=await asyncio.to_thread(self.reserve)
-                await asyncio.sleep(max(0,at-time.time()))
-            wait=3.1-(time.monotonic()-self.last)
-            if wait>0:await asyncio.sleep(wait)
-            self.last=time.monotonic()
+                # Recheck after every wait; do not pre-book future starts that
+                # could bunch together when a delayed process wakes up.
+                while True:
+                    slot=await asyncio.to_thread(self.reserve,path)
+                    if slot['granted']:break
+                    await asyncio.sleep(max(0.01,slot['at']-time.time()))
+            else:
+                # Conservative fallback for callers without shared persistence.
+                wait=3.1-(time.monotonic()-self.last)
+                if wait>0:await asyncio.sleep(wait)
+                self.last=time.monotonic()
             try:
                 if _commodity_probe:return await asyncio.to_thread(self._request,path,body,commodity_probe=True)
                 return await asyncio.to_thread(self._request,path,body)
+            except ProviderError as error:
+                if self.store and (error.status==429 or error.code in ('805','DH-904')):
+                    await asyncio.to_thread(self.rate_backoff)
+                raise
             except CredentialError:raise ProviderError('Dhan credentials unavailable',code='DH-901',status=401) from None
             except (KeyError,TypeError,ValueError):raise ProviderError('Invalid Dhan data request or response') from None
