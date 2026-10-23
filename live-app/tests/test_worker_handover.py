@@ -101,3 +101,52 @@ def test_cancel_race_requires_fresh_terminal_evidence(monkeypatch,terminal):
     else:
         with pytest.raises(subprocess.CalledProcessError):m.activate('repo@sha256:new',lease_check=lambda:True)
     assert any('execute' in c for c in calls) is terminal
+
+
+def test_watchdog_start_during_old_execution_shutdown_does_not_block_or_duplicate(monkeypatch):
+    old=m.JOB+'-old';new=m.JOB+'-new';calls=[];sleeps=[]
+    snapshots=iter([[old],[old,new],[new],[new]])
+    monkeypatch.setattr(m,'active_executions',lambda:next(snapshots))
+    monkeypatch.setattr(m.time,'sleep',sleeps.append)
+    def run(*args):
+        calls.append(args)
+        return json.dumps({'spec':{'template':{'spec':{'template':{'spec':{'containers':[{'image':'repo@sha256:new'}]}}}}}})
+    monkeypatch.setattr(m,'gcloud',run)
+    m.activate('repo@sha256:new')
+    assert sleeps==[5]
+    assert [c for c in calls if 'cancel' in c]==[('run','jobs','executions','cancel',old,'--no-async','--quiet')]
+    assert not any('execute' in c for c in calls)
+
+
+def test_new_execution_never_hides_an_original_execution_that_has_not_stopped(monkeypatch):
+    old=m.JOB+'-old';calls=[]
+    snapshots=iter([[old],[old,m.JOB+'-new']])
+    monkeypatch.setattr(m,'active_executions',lambda:next(snapshots))
+    ticks=iter([0,181]);monkeypatch.setattr(m.time,'monotonic',lambda:next(ticks))
+    def run(*args):
+        calls.append(args)
+        return json.dumps({'spec':{'template':{'spec':{'template':{'spec':{'containers':[{'image':'repo@sha256:new'}]}}}}}})
+    monkeypatch.setattr(m,'gcloud',run)
+    with pytest.raises(RuntimeError,match='still running'):m.activate('repo@sha256:new')
+    assert not any('execute' in c for c in calls)
+
+
+def test_verified_runtime_continues_without_cancelling_healthy_collector(monkeypatch):
+    calls=[]
+    def run(*args):
+        calls.append(args)
+        return json.dumps({'spec':{'template':{'spec':{'template':{'spec':{'containers':[{'image':'repo@sha256:new'}]}}}}}})
+    monkeypatch.setattr(m,'gcloud',run)
+    monkeypatch.setattr(m,'active_executions',lambda:pytest.fail('Healthy matching runtime must keep recording'))
+    m.activate('repo@sha256:new',release_check=lambda:True)
+    assert len(calls)==1 and 'describe' in calls[0]
+    with pytest.raises(ValueError):m.activate('repo@sha256:wrong',release_check=lambda:True)
+
+
+@pytest.mark.parametrize('change,verified',[({},True),({'worker_active':False},False),({'worker_build_matches':False},False),({'worker_build_id':'old'},False),({'enabled':False},False)])
+def test_running_release_requires_enabled_active_matching_source(monkeypatch,change,verified):
+    import check_worker_release
+    monkeypatch.setattr(check_worker_release,'runtime_build',lambda:'fixture')
+    monkeypatch.setattr(m,'worker_evidence',lambda:{'enabled':True,'worker_active':True,
+        'worker_build_matches':True,'worker_build_id':'fixture',**change})
+    assert m.running_release_verified() is verified

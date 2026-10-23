@@ -32,23 +32,37 @@ def active_executions():
     return active
 
 
-def durable_lease_released():
-    """Public read-only evidence, pinned to the deployed source fingerprint."""
+def worker_evidence():
+    """Read non-secret worker evidence without changing its lease."""
     from check_worker_release import URL,runtime_build
     from urllib.request import urlopen,Request
     try:
         with urlopen(Request(URL,headers={'Cache-Control':'no-cache'}),timeout=8) as response:data=json.load(response)
-        return (data.get('worker_lease_held') is False and data.get('worker_active') is False
-                and data.get('expected_worker_build_id')==runtime_build())
-    except Exception:return False
+        return data if data.get('expected_worker_build_id')==runtime_build() else {}
+    except Exception:return {}
 
 
-def activate(expected_image,lease_check=None):
+def durable_lease_released():
+    data=worker_evidence()
+    return data.get('worker_lease_held') is False and data.get('worker_active') is False
+
+
+def running_release_verified():
+    from check_worker_release import runtime_build
+    data=worker_evidence()
+    return (data.get('enabled') is True and data.get('worker_active') is True
+            and data.get('worker_build_matches') is True and data.get('worker_build_id')==runtime_build())
+
+
+def activate(expected_image,lease_check=None,release_check=None):
     if '@sha256:' not in expected_image:raise ValueError('Immutable image required')
     def verify():
         job=json.loads(gcloud('run','jobs','describe',JOB,'--format=json'))
         if job_image(job)!=expected_image:raise ValueError('Collector image changed; activation stopped')
     verify()
+    if release_check and release_check():
+        print('Exact collector runtime already active; retained checkpoint continues without another handover.')
+        return
     active=active_executions()
     for name in active:
         try:gcloud('run','jobs','executions','cancel',name,'--no-async','--quiet')
@@ -58,9 +72,15 @@ def activate(expected_image,lease_check=None):
             entry=json.loads(gcloud('run','jobs','executions','describe',name,'--format=json'))
             if entry.get('metadata',{}).get('name')!=name or not execution_terminal(entry):raise
     deadline=time.monotonic()+180
-    while active_executions():
+    while set(active_executions()).intersection(active):
         if time.monotonic()>=deadline:raise RuntimeError('Collector still running; no new execution started')
         time.sleep(5)
+    def already_started():
+        if not active_executions():return False
+        verify()
+        print('Collector already started during handover; running build acceptance is required.')
+        return True
+    if already_started():return
     # Also handles a lease left by a recently terminated execution. Do not
     # delete or edit it: the last checkpoint remains authoritative.
     for remaining in range(610,0,-10):
@@ -69,13 +89,13 @@ def activate(expected_image,lease_check=None):
         if lease_check and lease_check():
             print('Durable collector lease release verified; expiry wait is no longer required.',flush=True)
             break
+        if already_started():return
         if remaining%60==10:print(f'Worker handover: waiting {remaining}s for durable leases.',flush=True)
         time.sleep(10)
     verify()
-    if active_executions():
+    if already_started():
         # The existing private watchdog can win this race after lease expiry.
         # Do not cancel or duplicate it; the next rollout gate checks its build.
-        print('Collector already started during handover; running build acceptance is required.')
         return
     gcloud('run','jobs','execute',JOB,'--async','--quiet')
     print('New collector execution requested on the verified image; live outcomes still require verification.')
@@ -87,4 +107,4 @@ if __name__=='__main__':
     if len(traffic)!=1 or traffic[0]['percent']!=100:raise SystemExit('One verified serving revision required')
     candidate=json.loads(gcloud('run','revisions','describe',traffic[0]['revisionName'],'--format=json'))
     if not re.fullmatch(r'theta-plus-f380-[0-9]{14}',traffic[0]['revisionName']):raise SystemExit('Collector repair release must be serving first')
-    activate(candidate['status']['imageDigest'],lease_check=durable_lease_released)
+    activate(candidate['status']['imageDigest'],lease_check=durable_lease_released,release_check=running_release_verified)
