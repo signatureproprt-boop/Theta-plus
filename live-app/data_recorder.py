@@ -16,7 +16,7 @@ from urllib.parse import urlencode
 import websockets
 from collection import replace,install_once
 from sdk_feeds import make_codec,decode_packet,SEGMENTS,split_live_packets
-from live_research import observation
+from live_research import observation,number
 from diagnostics import capture
 from provider import ProviderError
 
@@ -45,6 +45,7 @@ class Journal:
         self.stream_id=stream_id or family
         self.session_id=uuid.uuid4().hex;self.sequence=0;self.frames=[];self.bytes=0;self.latest={};self.decode_errors=0
         self.expected={(SEGMENTS[i['segment']],str(i['security_id'])):i for i in instruments}
+        self.previous={}
         self.observed=set();self.first=None;self.last=None;self.framing_adjustments=0
 
     def append(self,frame,codec):
@@ -64,7 +65,16 @@ class Journal:
                 if not isinstance(decoded,dict) or not decoded:self.decode_errors+=1;continue
                 self.observed.add(identity)
                 if self.family=='live':
+                    if code==6:
+                        previous=number(decoded.get('prev_close'))
+                        if previous is not None and previous>0:
+                            meta={'previous_close':previous,'previous_close_received_at':stamp}
+                            self.previous[identity]=meta
+                            key=str(identity[0])+':'+identity[1]
+                            if key in self.latest:self.latest[key]={**self.latest[key],**meta}
+                        continue # Previous-close packets never become price ticks.
                     row=observation(codec,packet,self.expected,received)
+                    if row:row={**row,**self.previous.get(identity,{})}
                     if row and row.get('type')=='tick':ticks.append(row)
                 else:
                     row={**self.expected[identity],'received_at':stamp,'decoded':decoded,'quote_at':None,

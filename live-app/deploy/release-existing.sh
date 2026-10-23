@@ -96,15 +96,15 @@ from hashlib import sha256
 from urllib.request import urlopen
 import sys
 url=sys.argv[1]
-for name in ('dhan-desk.css','instruments.js','app.js','collection.js','dashboard.js','dashboard.css','research.js','terminal.js','research-live.js','chart-data.js','price-chart.js','vendor/lightweight-charts-5.2.1.js'):
+for name in ('market-home.js','market-home.css','dhan-desk.css','instruments.js','app.js','collection.js','dashboard.js','dashboard.css','research.js','terminal.js','research-live.js','chart-data.js','price-chart.js','vendor/lightweight-charts-5.2.1.js'):
     expected=sha256((Path('static')/name).read_bytes()).hexdigest()
     with urlopen(url+'/static/'+name+'?release=dashboard',timeout=30) as response:
         observed=sha256(response.read()).hexdigest()
     if observed!=expected:raise RuntimeError('Dashboard asset mismatch: '+name)
 with urlopen(url+'/',timeout=30) as response:html=response.read().decode()
-if 'page-instruments' not in html or 'instruments.js?v=1' not in html:
+if 'page-instruments' not in html or 'instruments.js?v=2' not in html:
     raise RuntimeError('All-instrument directory missing from serving HTML')
-if 'dashboard.js?v=3.8.1' not in html or 'dashboard.css?v=3.8.5' not in html or 'dhan-desk.css?v=2' not in html:
+if 'market-home.js?v=1' not in html or 'market-home.css?v=1' not in html or 'dashboard.js?v=3.8.1' not in html or 'dashboard.css?v=3.8.5' not in html or 'dhan-desk.css?v=2' not in html:
     raise RuntimeError('Dashboard assets not referenced by serving HTML')
 print('Dashboard HTML and exact source assets verified.')
 PYDASHBOARD

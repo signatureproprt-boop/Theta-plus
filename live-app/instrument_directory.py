@@ -7,7 +7,7 @@ import asyncio
 import anyio
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing, contextmanager
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, timedelta
 import json
 import os
 from pathlib import Path
@@ -15,13 +15,20 @@ import re
 import sqlite3
 import tempfile
 import threading
+import time
+import math
 
 from fastapi import HTTPException
-from collection import SEGMENTS, contract_expiry
+from collection import SEGMENTS, contract_expiry, digest
 from market_board import quote_row
 from runtime import IST
 
 SEGMENT_NAMES = sorted(set(SEGMENTS.values()))
+CATEGORIES={'all':'1=1','indices':"kind='INDEX' AND segment='IDX_I'",
+            'cash':"segment IN ('NSE_EQ','BSE_EQ')",'futures':"kind LIKE 'FUT%'",
+            'options':"kind LIKE 'OPT%'",'currency':"segment IN ('NSE_CURRENCY','BSE_CURRENCY')",
+            'commodities':"segment='MCX_COMM' OR (exchange='NSE' AND raw_segment='M')",
+            'unmapped':"segment='UNMAPPED'"}
 
 
 class InstrumentDirectory:
@@ -29,6 +36,7 @@ class InstrumentDirectory:
         self.collector = collector
         self.temporary = tempfile.TemporaryDirectory(prefix='theta-instruments-')
         self.lock = threading.Lock()
+        self.snapshot_lock=threading.Lock();self.snapshot_at=0;self.snapshots={};self.snapshot_errors=0
 
     def index(self):
         cat = self.collector.catalogue()
@@ -37,10 +45,10 @@ class InstrumentDirectory:
         sha = cat.get('sha256', '')
         if not re.fullmatch('[a-f0-9]{64}', sha):
             raise HTTPException(503, 'Catalogue identity is invalid')
-        target = Path(self.temporary.name) / (sha + '.sqlite3')
+        target = Path(self.temporary.name) / (sha + '-browse-v2.sqlite3')
         if target.is_file():
             return target, cat
-        if not self.lock.acquire(timeout=1):
+        if not self.lock.acquire(timeout=30):
             raise HTTPException(503, 'Instrument search index is preparing; retry shortly')
         pending = target.with_suffix('.building')
         try:
@@ -48,7 +56,7 @@ class InstrumentDirectory:
                 return target, cat
             pending.unlink(missing_ok=True)
             with closing(sqlite3.connect(pending)) as db:
-                db.execute('CREATE TABLE instruments (position INTEGER PRIMARY KEY, key TEXT UNIQUE, segment TEXT, expiry TEXT, search TEXT, document TEXT)')
+                db.execute('CREATE TABLE instruments (position INTEGER PRIMARY KEY, key TEXT UNIQUE, segment TEXT, expiry TEXT, search TEXT, document TEXT, kind TEXT, symbol TEXT, exchange TEXT, raw_segment TEXT, rank INTEGER)')
                 pages = [p for p in cat['pages'] if p['group'] != 'rolling-underlyings']
                 position = 0
                 # Bound outstanding page reads; do not load a second full master
@@ -59,10 +67,13 @@ class InstrumentDirectory:
                             batch = []
                             for item in items:
                                 search = ' '.join(str(item.get(k) or '') for k in ('symbol', 'display', 'underlying', 'security_id')).upper()
-                                batch.append((position, item['key'], item.get('segment') or 'UNMAPPED', contract_expiry(item), search, json.dumps(item)))
+                                rank=0 if item.get('segment')=='IDX_I' and item.get('security_id') in ('13','25','21') else 1 if item.get('instrument')=='INDEX' else 2 if item.get('instrument')=='EQUITY' else 3
+                                batch.append((position, item['key'], item.get('segment') or 'UNMAPPED', contract_expiry(item), search, json.dumps(item),item.get('instrument'),item.get('symbol'),item.get('exchange'),item.get('raw_segment'),rank))
                                 position += 1
-                            db.executemany('INSERT INTO instruments VALUES (?,?,?,?,?,?)', batch)
+                            db.executemany('INSERT INTO instruments VALUES (?,?,?,?,?,?,?,?,?,?,?)', batch)
                 db.execute('CREATE INDEX segment_expiry ON instruments(segment, expiry)')
+                db.execute('CREATE INDEX browse_kind ON instruments(kind,expiry)')
+                db.execute('CREATE INDEX browse_order ON instruments(rank,symbol,expiry,position)')
                 db.commit()
             os.replace(pending, target)
             for old in target.parent.glob('*.sqlite3'):
@@ -89,10 +100,10 @@ class InstrumentDirectory:
         with closing(db):
             yield db, cat
 
-    def search(self, query='', segment='', page=0, active_only=True):
-        if len(query) > 80 or page < 0 or page > 100000 or segment not in ['', 'UNMAPPED', *SEGMENT_NAMES]:
+    def search(self, query='', segment='', page=0, active_only=True,category='all',include_quotes=False):
+        if len(query) > 80 or page < 0 or page > 100000 or segment not in ['', 'UNMAPPED', *SEGMENT_NAMES] or category not in CATEGORIES:
             raise HTTPException(422, 'Invalid instrument search or page')
-        where, args = ['1=1'], []
+        where, args = ['('+CATEGORIES[category]+')'], []
         if query.strip():
             literal = query.strip().upper().replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
             where.append("search LIKE ? ESCAPE '\\'")
@@ -104,13 +115,119 @@ class InstrumentDirectory:
         clause = ' AND '.join(where)
         with self.database() as (db, cat):
             count = db.execute('SELECT count(*) FROM instruments WHERE '+clause, args).fetchone()[0]
-            rows = db.execute('SELECT document FROM instruments WHERE '+clause+' ORDER BY position LIMIT 50 OFFSET ?', [*args, page*50]).fetchall()
+            rows = db.execute('SELECT document FROM instruments WHERE '+clause+' ORDER BY rank,symbol,expiry,position LIMIT 50 OFFSET ?', [*args, page*50]).fetchall()
+        items=[json.loads(row[0]) for row in rows]
+        if include_quotes:
+            observations=self.saved_quotes(items)
+            items=[{**i,'saved_quote':observations.get(i['key'])} for i in items]
         return {'catalogue_sha256': cat['sha256'], 'catalogue_at': cat.get('fetched_at'),
                 'catalogue_rows': cat['rows'], 'matches': count, 'page': page,
                 'next_page': page+1 if (page+1)*50 < count else None,
-                'items': [json.loads(row[0]) for row in rows], 'segments': SEGMENT_NAMES,
+                'items':items,'category':category,'segments': SEGMENT_NAMES,
                 'review_reasons': cat.get('review_reasons', {}),
                 'coverage_note': 'Catalogue discovery is not data coverage. Quotes/history require separate provider responses.'}
+
+    def saved_quotes(self,items):
+        from data_system import LIVE_STREAMS
+        with self.snapshot_lock:
+            if time.monotonic()-self.snapshot_at>15:
+                def read(stream):
+                    try:return self.collector.store.document('system/latest/'+stream)[0] or {}
+                    except Exception:return None
+                with ThreadPoolExecutor(max_workers=4) as pool:
+                    documents=list(pool.map(read,LIVE_STREAMS))
+                self.snapshot_errors=sum(d is None for d in documents)
+                self.snapshots={(r.get('segment'),str(r.get('security_id'))):r for d in documents if isinstance(d,dict) and isinstance(d.get('rows',{}),dict) for r in d.get('rows',{}).values() if isinstance(r,dict)}
+                self.snapshot_at=time.monotonic()
+            snapshots=self.snapshots
+        result={};clock=datetime.now(timezone.utc)
+        for item in items:
+            row=snapshots.get((item.get('segment'),str(item.get('security_id'))))
+            if not row or item.get('reason') or (item.get('instrument','').startswith(('FUT','OPT')) and row.get('expiry')!=contract_expiry(item)):continue
+            if row.get('exchange') and row['exchange']!=item.get('exchange'):continue
+            price=row.get('ltp')
+            if isinstance(price,bool) or not isinstance(price,(float,int)) or not math.isfinite(price) or price<=0:continue
+            try:
+                received=datetime.fromisoformat(row['received_at'])
+                if received.tzinfo is None or received>clock:continue
+            except (KeyError,ValueError,TypeError):continue
+            trade=row.get('trade_at')
+            try:
+                at=datetime.fromisoformat(trade)
+                if at.tzinfo is None or at>clock:trade=None
+            except (TypeError,ValueError):trade=None
+            def numeric(value):return value if not isinstance(value,bool) and isinstance(value,(int,float)) and math.isfinite(value) and value>=0 else None
+            result[item['key']]={'price':price,'volume':numeric(row.get('volume')),'oi':numeric(row.get('oi')),
+                'received_at':row['received_at'],'trade_at':trade,
+                'state':'RETAINED_TRADE' if trade else 'TIME_UNVERIFIED','time_basis':'Stored last trade; not certified exchange quote freshness'}
+            previous=numeric(row.get('previous_close'))
+            if previous:
+                result[item['key']].update(previous_close=previous,change=price-previous,change_pct=100*(price-previous)/previous)
+        return result
+
+    def overview(self,keys=''):
+        wanted=keys.split(',') if keys else []
+        if len(wanted)>30 or any(not re.fullmatch('[a-zA-Z0-9_-]{1,128}',k) for k in wanted):raise HTTPException(422,'Use at most 30 catalogue keys')
+        today=datetime.now(IST).date().isoformat()
+        with self.database() as (db,cat):
+            counts={name:db.execute('SELECT count(*) FROM instruments WHERE ('+clause+') AND (expiry IS NULL OR expiry>=?)',[today]).fetchone()[0] for name,clause in CATEGORIES.items()}
+            if wanted:
+                rows=db.execute('SELECT document FROM instruments WHERE key IN ('+','.join('?' for _ in wanted)+')',wanted).fetchall()
+                by_key={json.loads(r[0])['key']:json.loads(r[0]) for r in rows};items=[by_key[k] for k in wanted if k in by_key]
+            else:
+                popular=['ADANIPORTS','BAJFINANCE','MARUTI','M&M','ULTRACEMCO','SUNPHARMA','POWERGRID','TITAN','RELIANCE','INFY','HDFCBANK','ITC']
+                rows=db.execute("SELECT document FROM instruments WHERE segment='NSE_EQ' AND kind='EQUITY' AND symbol IN ("+','.join('?' for _ in popular)+') ORDER BY position',popular).fetchall()
+                by_symbol={}
+                for row in rows:
+                    item=json.loads(row[0])
+                    if not item.get('reason'):by_symbol.setdefault(item['symbol'],item)
+                items=[by_symbol[s] for s in popular if s in by_symbol]
+                if not items:items=[json.loads(r[0]) for r in db.execute("SELECT document FROM instruments WHERE segment='IDX_I' ORDER BY rank,symbol LIMIT 12")]
+            index_names=['NIFTY','NIFTYNEXT50','BANKNIFTY','INDIAVIX','FINNIFTY']
+            indices=[json.loads(r[0]) for r in db.execute("SELECT document FROM instruments WHERE segment='IDX_I' AND kind='INDEX' AND replace(replace(symbol,' ',''),'_','') IN ("+','.join('?' for _ in index_names)+')',index_names)]
+            indices.sort(key=lambda i:index_names.index(re.sub('[ _]','',i['symbol'])))
+        quotes=self.saved_quotes(items+indices)
+        return {'catalogue_sha256':cat['sha256'],'catalogue_rows':cat['rows'],'catalogue_at':cat.get('fetched_at'),
+                'counts':counts,'watchlist':[{**i,'saved_quote':quotes.get(i['key'])} for i in items],
+                'indices':[{**i,'saved_quote':quotes.get(i['key'])} for i in indices],
+                'unresolved':sum(cat.get('review_reasons',{}).values()),'missing_watchlist_keys':[k for k in wanted if k not in {i['key'] for i in items}],
+                'snapshot_read_errors':self.snapshot_errors,
+                'scope':'Current catalogue counts; watchlist prices refresh every 15 seconds from retained recorder observations, not all-market tick coverage.'}
+
+    def saved_history(self,key,catalogue_sha256,start,end,family='intraday',interval=1):
+        if family not in ('daily','intraday') or interval not in (1,5,15,25,60) or not date(1900,1,1)<=start<end<=datetime.now(IST).date() or (end-start).days>31:
+            raise HTTPException(422,'Read up to 31 completed days and a supported candle interval')
+        item=self.resolve(key,catalogue_sha256);variant={} if family=='daily' else {'interval':str(interval)}
+        series=digest({'exchange':item['exchange'],'segment':item['segment'],'sid':item['security_id'],'instrument':item['instrument'],'family':family,'variant':variant})
+        days=[(start+timedelta(days=n)).isoformat() for n in range((end-start).days)]
+        with ThreadPoolExecutor(max_workers=8) as pool:documents=list(pool.map(lambda d:self.collector.store.document('candles/'+series+'/'+d)[0],days))
+        candles={};conflicts=set();invalid=0;found=[];clock=datetime.now(timezone.utc)
+        for day,doc in zip(days,documents):
+            if not doc:continue
+            if not isinstance(doc,dict) or not isinstance(doc.get('instrument'),dict) or not isinstance(doc.get('candles'),dict):invalid+=1;continue
+            identity=doc.get('instrument',{})
+            if doc.get('series')!=series or doc.get('day')!=day or doc.get('variant')!=variant or any(identity.get(k)!=item.get(k) for k in ('exchange','segment','security_id','instrument')):invalid+=1;continue
+            if item['instrument'].startswith(('FUT','OPT')) and contract_expiry(identity)!=contract_expiry(item):invalid+=1;continue
+            if item['instrument'].startswith('OPT') and any(identity.get(k)!=item.get(k) for k in ('strike','side')):invalid+=1;continue
+            found.append(day)
+            for row in doc.get('candles',{}).values():
+                try:
+                    stamp=row['timestamp'];values=[row[k] for k in ('open','high','low','close','volume')]
+                    if any(isinstance(v,bool) or not isinstance(v,(int,float)) or not math.isfinite(v) for v in [stamp,*values]):raise ValueError()
+                    at=datetime.fromtimestamp(stamp,timezone.utc)
+                    if int(stamp)!=stamp or int(stamp)%60 or at>clock or at.astimezone(IST).date().isoformat()!=day:raise ValueError()
+                    o,h,l,c,v=values
+                    if min(o,h,l,c)<=0 or v<0 or h<max(o,l,c) or l>min(o,c):raise ValueError()
+                    value={'time':int(stamp),'open':o,'high':h,'low':l,'close':c,'volume':v}
+                    if int(stamp) in candles and candles[int(stamp)]!=value:conflicts.add(int(stamp))
+                    candles[int(stamp)]=value
+                except (KeyError,ValueError,TypeError,OverflowError,OSError):invalid+=1
+        rows=[candles[t] for t in sorted(candles) if t not in conflicts];truncated=max(0,len(rows)-50000)
+        return {'instrument':item,'series':series,'family':family,'interval':interval,'from':start.isoformat(),'to_exclusive':end.isoformat(),
+                'candles':rows[-50000:],'rows':min(50000,len(rows)),'truncated_rows':truncated,'invalid_excluded':invalid,'conflicting_timestamps':len(conflicts),
+                'available_days':found,'absent_partitions':[d for d in days if d not in found],
+                'state':'RETAINED_ROWS' if rows else 'NO_SAVED_ROWS','coverage_verified':False,
+                'coverage_note':'Stored source candles only. Absent partitions are not proof of non-trading days or unavailable provider history; gaps are never filled.'}
 
     def resolve(self, key, catalogue_sha256, current_quote=False):
         if not isinstance(key, str) or len(key) > 128:

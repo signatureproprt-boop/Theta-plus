@@ -92,8 +92,16 @@ def create_app(db_path=None):
     app.state.instrument_directory=directory
 
     @app.get('/api/instruments')
-    def instruments(q:str='',segment:str='',page:int=0,active_only:bool=True):
-        return directory.search(q,segment,page,active_only)
+    def instruments(q:str='',segment:str='',page:int=0,active_only:bool=True,category:str='all',include_quotes:bool=False):
+        return directory.search(q,segment,page,active_only,category,include_quotes)
+
+    @app.get('/api/instruments/overview')
+    def instrument_overview(keys:str=''):
+        return directory.overview(keys)
+
+    @app.get('/api/instruments/saved-history')
+    def instrument_saved_history(key:str,catalogue_sha256:str,start:date,end:date,family:str='intraday',interval:int=1):
+        return directory.saved_history(key,catalogue_sha256,start,end,family,interval)
 
     @app.get('/api/instruments/recorded')
     def instrument_recorded(key:str,catalogue_sha256:str):

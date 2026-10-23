@@ -122,6 +122,8 @@ def test_routes_require_admin_before_provider_access(tmp_path,monkeypatch):
     monkeypatch.setattr(server,'require_admin',admin)
     client=TestClient(app);body={'key':'index','catalogue_sha256':SHA}
     assert client.get('/api/instruments?q=NIFTY').json()['items'][0]['key']=='index'
+    assert client.get('/api/instruments/overview').json()['catalogue_rows']==1
+    assert client.get('/api/instruments/saved-history',params={**body,'start':'2026-10-21','end':'2026-10-23'}).json()['rows']==0
     for path,payload in [('quote',body),('history',{**body,'start':'2026-10-22','end':'2026-10-23'})]:
         assert client.post('/api/instruments/'+path,json=payload).status_code==403
     async def call(*args):return {'data':{'IDX_I':{'13':{'last_price':100}}}}
@@ -149,3 +151,106 @@ def test_master_replacement_keeps_open_readers_valid_and_bounds_disk_indexes(dir
         assert directory.search()['items'][0]['key']=='new'
         assert db.execute('SELECT key FROM instruments').fetchone()[0]=='index'
     assert len(list(__import__('pathlib').Path(directory.temporary.name).glob('*.sqlite3')))==1
+
+
+def test_categories_browse_all_segments_and_keep_unmapped_visible(directory):
+    entries=[item(),item('cash',segment='NSE_EQ',instrument='EQUITY',symbol='RELIANCE'),
+        item('bse',segment='BSE_EQ',instrument='EQUITY',symbol='RELIANCE',exchange='BSE'),
+        item('future',segment='NSE_FNO',instrument='FUTIDX',expiry='2099-01-01'),
+        item('option',segment='BSE_FNO',instrument='OPTIDX',expiry='2099-01-01'),
+        item('fx',segment='NSE_CURRENCY',instrument='FUTCUR',expiry='2099-01-01'),
+        item('mcx',segment='MCX_COMM',instrument='FUTCOM',exchange='MCX',raw_segment='M',expiry='2099-01-01'),
+        item('unknown',segment=None,instrument='FUTCOM',exchange='NSE',raw_segment='M',expiry='2099-01-01',reason='Unmapped'),
+        item('old',segment='NSE_FNO',instrument='FUTIDX',expiry='2000-01-01')]
+    seed(directory.collector,entries,'b'*64)
+    counts={'all':8,'indices':1,'cash':2,'futures':4,'options':1,'currency':1,'commodities':2,'unmapped':1}
+    for category,count in counts.items():assert directory.search(category=category)['matches']==count
+    assert directory.search()['items'][0]['key']=='index'
+    assert directory.search(category='futures',active_only=False)['matches']==5
+    assert directory.overview()['counts']==counts
+    with pytest.raises(HTTPException):directory.search(category="cash' OR 1=1")
+
+
+def test_browse_prices_use_exact_segment_and_do_not_invent_day_change(directory):
+    items=[item('cash',segment='NSE_EQ',instrument='EQUITY',symbol='RELIANCE'),
+           item('bse',segment='BSE_EQ',exchange='BSE',instrument='EQUITY',symbol='RELIANCE')]
+    seed(directory.collector,items,'b'*64);at=datetime.now(timezone.utc).isoformat()
+    directory.collector.store.put_document('system/latest/live',{'rows':{'1:13':{'segment':'NSE_EQ','security_id':'13','ltp':123,'received_at':at,'trade_at':at,'volume':20},
+        '4:13':{'segment':'BSE_EQ','security_id':'13','ltp':456,'received_at':at,'trade_at':at}}},0)
+    result=directory.search(include_quotes=True)
+    quotes={i['key']:i['saved_quote'] for i in result['items']}
+    assert quotes['cash']['price']==123 and quotes['bse']['price']==456
+    assert 'change' not in quotes['cash'] and 'change_pct' not in quotes['cash']
+    assert directory.overview('bse,cash')['watchlist'][0]['saved_quote']['price']==456
+    with pytest.raises(HTTPException):directory.overview('../private')
+    with pytest.raises(HTTPException):directory.overview(','.join(['cash']*31))
+
+
+def test_bad_receipts_and_wrong_derivative_expiry_cannot_be_presented_as_prices(directory):
+    now=datetime.now(timezone.utc).isoformat()
+    items=[item('old',instrument='FUTIDX',segment='NSE_FNO',expiry='2099-01-01'),item('bad',security_id='20')]
+    seed(directory.collector,items,'b'*64)
+    directory.collector.store.put_document('system/latest/live',{'rows':{
+        '2:13':{'segment':'NSE_FNO','security_id':'13','ltp':1,'received_at':now,'expiry':'2098-01-01'},
+        '0:20':{'segment':'IDX_I','security_id':'20','ltp':2,'received_at':'2099-01-01T00:00:00+00:00'}}},0)
+    assert directory.saved_quotes(items)=={}
+
+
+def test_price_read_failure_does_not_hide_the_instrument_catalogue(directory,monkeypatch):
+    original=directory.collector.store.document
+    def document(key):
+        if key.startswith('system/latest/'):raise OSError('Store temporarily unavailable')
+        return original(key)
+    monkeypatch.setattr(directory.collector.store,'document',document)
+    assert directory.search(include_quotes=True)['items'][0]['key']=='index'
+    result=directory.overview()
+    assert result['catalogue_rows']==1 and result['snapshot_read_errors']==4
+
+
+def test_saved_chart_reads_exact_instrument_and_interval_without_provider(directory):
+    from test_collection import candles
+    item_=directory.resolve('index',SHA)
+    task={'family':'intraday','item':item_,'variant':{'interval':'1'},'from':'2026-10-21','to':'2026-10-23'}
+    directory.collector.persist_candles(task,{'raw':candles('2026-10-22')})
+    result=directory.saved_history('index',SHA,date(2026,10,21),date(2026,10,23))
+    assert result['rows']==1 and result['candles'][0]['close']==11
+    assert result['available_days']==['2026-10-22'] and result['absent_partitions']==['2026-10-21']
+    assert result['coverage_verified'] is False
+    assert directory.saved_history('index',SHA,date(2026,10,21),date(2026,10,23),interval=5)['rows']==0
+    assert directory.collector.store.document('control/lease')[0] is None
+    with pytest.raises(HTTPException):directory.saved_history('index',SHA,date(2026,1,1),date(2026,10,23))
+
+
+def test_saved_chart_excludes_corrupt_identity_invalid_rows_and_conflicting_timestamps(directory):
+    from test_collection import candles
+    task={'family':'intraday','item':directory.resolve('index',SHA),'variant':{'interval':'1'},'from':'2026-10-21','to':'2026-10-23'}
+    quality=directory.collector.persist_candles(task,{'raw':candles('2026-10-22')})
+    key='candles/'+quality['series']+'/2026-10-22';doc,version=directory.collector.store.document(key)
+    row=next(iter(doc['candles'].values()));doc['candles']['conflict']={**row,'close':10.5}
+    doc['candles']['invalid']={**row,'timestamp':True}
+    directory.collector.store.put_document(key,doc,version)
+    result=directory.saved_history('index',SHA,date(2026,10,21),date(2026,10,23))
+    assert result['rows']==0 and result['conflicting_timestamps']==1 and result['invalid_excluded']==1
+    doc,version=directory.collector.store.document(key);doc['instrument']={**doc['instrument'],'segment':'BSE_EQ'}
+    directory.collector.store.put_document(key,doc,version)
+    result=directory.saved_history('index',SHA,date(2026,10,21),date(2026,10,23))
+    assert result['rows']==0 and result['available_days']==[] and result['invalid_excluded']==1
+
+
+def test_previous_close_source_is_used_for_change_only_when_available(directory):
+    at=datetime.now(timezone.utc).isoformat()
+    directory.collector.store.put_document('system/latest/live',{'rows':{'0:13':{'segment':'IDX_I','security_id':'13','ltp':22600,'previous_close':22687.65,'received_at':at,'trade_at':at}}},0)
+    quote=directory.overview()['indices'][0]['saved_quote']
+    assert round(quote['change'],2)==-87.65 and round(quote['change_pct'],2)==-0.39
+    assert quote['previous_close']==22687.65
+
+
+def test_reused_derivative_security_id_does_not_show_another_expiry_history(directory):
+    from test_collection import candles
+    previous=item('future',segment='NSE_FNO',instrument='FUTIDX',expiry='2099-01-01')
+    seed(directory.collector,[previous],'b'*64)
+    task={'family':'intraday','item':previous,'variant':{'interval':'1'},'from':'2026-10-21','to':'2026-10-23'}
+    directory.collector.persist_candles(task,{'raw':candles('2026-10-22',{'open_interest':[100]})})
+    seed(directory.collector,[{**previous,'expiry':'2100-01-01'}],'c'*64)
+    result=directory.saved_history('future','c'*64,date(2026,10,21),date(2026,10,23))
+    assert result['rows']==0 and result['invalid_excluded']==1
