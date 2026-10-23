@@ -33,6 +33,8 @@ def test_pinned_catalogue_supplies_all_mapped_segments_without_inventing_identit
     assert {(i['segment'],i['security_id']) for i in rows}=={('IDX_I','13'),('NSE_EQ','2885'),('BSE_EQ','2885'),('MCX_COMM','999')}
     assert len(rows)==4 and rows[0]['key']=='nifty'
     assert plan['live_candidate_count']==4 and plan['live_capacity_excluded']==0
+    # Prefer primary NSE cash identities when the broader universe exceeds capacity.
+    assert [i['segment'] for i in board.live_catalogue if i['instrument']=='EQUITY']==['NSE_EQ','BSE_EQ']
     with pytest.raises(ValueError):load_pinned_instruments(Collector(None,store),board,{**cat,'fetched_at':'2026-10-01T00:00:00+00:00'},CLOCK)
 
 def test_four_bounded_shards_preserve_core_identity_and_report_overflow(monkeypatch):
