@@ -6,7 +6,20 @@ from collection import digest, now, replace
 from runtime import IST
 
 CONTROL='control/gap-recovery'
-SCAN_POLICY='validated-dh905-once-v1'
+SCAN_POLICY='bounded-daily-probe-v2'
+
+def daily_probe_ranges(task):
+    """One recent probe; at most 127 earlier windows, without date holes."""
+    if task.get('family')!='daily' or not valid_history_retry(task):return []
+    start=date.fromisoformat(task['from']);end=date.fromisoformat(task['to'])
+    if (end-start).days<=90:return []
+    probe=max(start,end-timedelta(days=30))
+    size=max(90,((probe-start).days+126)//127)
+    ranges=[[probe.isoformat(),end.isoformat()]]
+    while start<probe:
+        stop=min(probe,start+timedelta(days=size))
+        ranges.append([start.isoformat(),stop.isoformat()]);start=stop
+    return ranges
 
 def valid_history_retry(task):
     """Admit one unchanged DH-905 retry only for a valid history wire shape.
@@ -63,6 +76,10 @@ def eligible(entry):
     if family in ('daily','intraday','rolling') and 'Invalid OHLC or volume' in reason:return True
     if result.get('code')=='DH-905' and result.get('http_status')==400:
         return valid_history_retry(entry['task'])
+    if result.get('code')=='DH-907' and result.get('http_status')==400:
+        # Change only the date span; never interpret this ambiguous rejection as
+        # proof of an unsupported instrument or complete unavailable history.
+        return bool(daily_probe_ranges(entry['task']))
     # Entitlement, invalid wire shapes and ambiguous DH-907 no-data rejections
     # still need diagnosis, not an automatic retry loop.
     return result.get('http_status') in (500,502,503,504) or any('HTTP '+str(code) in reason for code in (500,502,503,504))
@@ -79,6 +96,9 @@ def tick(collector):
         state=replace(store,CONTROL,upgrade)
     if state.get('next_scan_at',0)>time.time():return False
     jobs=list(all_jobs(store))
+    active=sum(bool(j.get('history_slices')) and j['state'] in ('running','token_required','permission_blocked') for j in jobs)
+    if active>=8:
+        return False # Drain first; do not spin if all eight need credentials.
     sources=sorted((j for j in jobs if not j.get('retry_of') and j['state'] in ('running','completed')),key=lambda j:j['id'])
     if not sources:return False
     position=state.get('position',0)%len(sources);parent=sources[position];jid=parent['id']
@@ -92,15 +112,22 @@ def tick(collector):
                 (task['item']['instrument']=='OPTIDX' and parent.get('rolling_identity_version')!=2)):
             continue
         previous=[j for j in jobs if j.get('retry_of')==entry['key']]
+        ranges=daily_probe_ranges(task) if entry['result'].get('code') in ('DH-905','DH-907') else []
+        if ranges:
+            if any(j.get('history_slices') for j in previous):continue
+            if any(j.get('rows_saved') and not j.get('repair_scope') and
+                   j['config'].get('start')==task['from'] and j['config'].get('end')==task['to'] and
+                   not any(j.get('counts',{}).get(k,0) for k in ('failed','partial','empty')) for j in previous):continue
         quarantine='Invalid OHLC or volume' in (entry['result'].get('reason') or '')
-        if previous and (not quarantine or any(j.get('rows_saved') or j['config'].get('quarantine_invalid_candles') for j in previous)):
+        if not ranges and previous and (not quarantine or any(j.get('rows_saved') or j['config'].get('quarantine_invalid_candles') for j in previous)):
             continue
         # Deterministic identity closes a crash between creation and checkpoint.
-        child_id=digest(['gap-recovery-v1',entry['key']])[:32]
-        child=collector.retry(jid,entry['key'],quarantine_invalid=quarantine,child_id=child_id)
+        child_id=digest(['daily-probe-recovery-v1' if ranges else 'gap-recovery-v1',entry['key']])[:32]
+        child=collector.retry(jid,entry['key'],quarantine_invalid=quarantine,child_id=child_id,history_ranges=ranges or None)
         if child['state']=='paused':collector.control(child_id,'resume')
+        if ranges:active+=1
         queued+=1
-        if queued>=5:break
+        if queued>=5 or active>=8:break
     remaining=processed<len(page['items']) or bool(page.get('next_cursor'))
     if remaining and last:cursors[jid]=last
     else:cursors.pop(jid,None)

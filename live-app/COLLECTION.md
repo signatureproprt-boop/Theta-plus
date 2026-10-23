@@ -206,3 +206,17 @@ The release still reports `all_market_continuous: false`.
 The GitHub main-branch release workflow checks Python/JavaScript, verifies serving
 assets including the instrument screen, then activates and verifies the matching
 collector build. Its existing rollback guard remains in effect.
+# Daily rejection recovery and quota rollover
+
+Long daily-history requests rejected with DH-905 or DH-907 now receive one
+deterministic date-window recovery job. A recent 30-day probe must return valid
+source rows before earlier windows are requested. The windows cover the exact
+original range, with at most 128 requests per instrument and eight active window
+jobs. Empty or rejected probes remain unresolved; they do not establish that
+older history is unavailable. Original results and per-window outcomes remain
+retained. Retry children never become automatic retry sources.
+
+The shared daily API guard preserves the current task and waits until 00:00:05
+IST the following day. The worker then resumes automatically. Explicit manual
+pauses remain paused. Legacy quota pauses resume only after their recorded IST
+day ends, with a valid timezone-aware timestamp and no manual-pause marker.

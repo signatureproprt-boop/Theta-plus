@@ -5,6 +5,8 @@ import re
 import time
 import uuid
 import signal
+from datetime import datetime
+from runtime import IST
 from fastapi import HTTPException
 from collection import Collector,replace,now
 from credentials import DhanCredentials
@@ -51,9 +53,24 @@ def launch_worker(store):
         raise HTTPException(503,'Background worker could not start. Check Cloud Run Job and its invoker permission; saved checkpoint retained.') from None
 
 
+def resume_legacy_budget_pause(store,job,clock=None):
+    """Migrate only explicit pre-upgrade quota pauses after their IST day ends."""
+    clock=clock or datetime.now(IST)
+    messages={'Daily API budget reached','Daily market-data request budget reached'}
+    def eligible(value):
+        if not value or value.get('state')!='paused' or value.get('system_user_paused') or value.get('message') not in messages:return False
+        try:
+            updated=datetime.fromisoformat(value['updated_at'])
+            return updated.tzinfo is not None and updated.astimezone(IST).date()<clock.astimezone(IST).date()
+        except (KeyError,ValueError,TypeError):return False
+    if not eligible(job):return job
+    return replace(store,'jobs/'+job['id'],lambda old:{**old,'state':'running',
+        'message':'Daily quota rollover: resuming the retained checkpoint.','updated_at':now()} if eligible(old) else old)
+
 def running_jobs(store):
     from gap_recovery import all_jobs
-    jobs=[j for j in all_jobs(store) if j.get('state')=='running']
+    jobs=[resume_legacy_budget_pause(store,j) for j in all_jobs(store)]
+    jobs=[j for j in jobs if j.get('state')=='running']
     jobs.sort(key=lambda j:(0 if str(j.get('system_role') or '').startswith('core_') else 1,j['id']))
     return iter(j['id'] for j in jobs)
 

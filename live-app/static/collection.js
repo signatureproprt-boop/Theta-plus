@@ -96,6 +96,7 @@
     <p>Job ${esc(job.id)} · ${esc(job.items_assessed)} work items assessed · ${esc(job.rows_saved)} rows / frames returned across batches</p>
     <div class="collection-options">${Object.entries(counts).map(([k,v])=>`<span>${esc(k)}: <b>${esc(v)}</b></span>`).join('')}</div>
     <p>${esc(job.message)}</p><p>Scope: ${esc((job.config?.families||[]).join(', ')||'Not reported')} · Symbols: ${esc(job.config?.symbols?.join(', ')||'All')} · Segments: ${esc(job.config?.segments?.join(', ')||'All mapped')} · ${esc(job.config?.start||'—')} → ${esc(job.config?.end||'—')} (exclusive)</p>
+    ${job.history_recovery?`<p>Daily history recovery: ${esc(job.history_recovery.windows_assessed)} / ${esc(job.history_recovery.windows_total)} date windows assessed · Recent probe: ${job.history_recovery.probe_verified?'valid rows received':'not yet verified'}. Original failed range and each window outcome remain available.</p>`:''}
     ${job.chain_discovery?`<p>Chain discovery: ${esc(job.chain_discovery.underlyings)} option-bearing underlyings · unresolved option rows: ${esc(JSON.stringify(job.chain_discovery.unresolved_option_rows))}. Discovery is not verified coverage.</p>`:''}
     <p>Current item: ${esc(job.current_item ? job.current_item.family+' / '+job.current_item.symbol+' / '+job.current_item.segment+' / '+job.current_item.from+' → '+job.current_item.to : '—')}</p><p>Updated: ${esc(job.updated_at)}</p>`;
   }

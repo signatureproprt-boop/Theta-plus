@@ -293,7 +293,11 @@ class Collector:
 
     @staticmethod
     def summary(job):
-        result={k:v for k,v in job.items() if k not in ('pages','current','chain_parent','chain_pending')}
+        result={k:v for k,v in job.items() if k not in ('pages','current','chain_parent','chain_pending','history_slices','history_slice_task')}
+        if job.get('history_slices'):
+            result['history_recovery']={'windows_total':len(job['history_slices']),
+                'windows_assessed':job['cursor']['window'],'probe_verified':job.get('slice_probe_verified',False),
+                'scope':'Recent daily probe, then earlier date windows only if the probe returns valid rows; original gaps retained.'}
         if job.get('current'):
             t=job['current']
             result['current_item']={'family':t['family'],'symbol':t['item']['symbol'],'segment':t['item']['segment'],'from':t['from'],'to':t['to']}
@@ -333,13 +337,14 @@ class Collector:
             else:job.pop('current',None);job.pop('chain_parent',None)
         else:self.advance(job,task);job.pop('current',None)
         job['retries']=0;job.pop('retry_at',None);job.pop('request_error',None)
+        job.pop('budget_wait_day',None)
 
     def control(self,jid,action):
         self.get_job(jid)
         def change(job):
             if action=='pause':
                 job['state']='paused'
-                if job.get('system_role'):job['system_user_paused']=True
+                job['system_user_paused']=True
             elif action=='resume':
                 if job['state']=='completed':return job
                 job['state']='running';job['message']='Running in bounded requests'
@@ -746,6 +751,10 @@ class Collector:
                 'missing_security_ids':sorted(expected-observed),'continuous':False,'exchange_time_verified':False}
 
     async def run(self,jid):
+        # Deferred quota/rate work must not acquire/release the shared collector
+        # lease on every worker pass. Re-read after acquiring before any mutation.
+        ready=await asyncio.to_thread(self.get_job,jid)
+        if ready['state']!='running' or ready.get('retry_at',0)>time.time():return self.summary(ready)
         with anyio.CancelScope(shield=True):
             owner=await anyio.to_thread.run_sync(self.acquire)
         try:
@@ -754,6 +763,17 @@ class Collector:
             if job.get('retry_at',0)>time.time():return self.summary(job)
             await asyncio.to_thread(self.upgrade_chain_job,job)
             task=job.get('current')
+            if job.get('history_slices') and not task:
+                position=job['cursor']['window']
+                if position>=len(job['history_slices']) or (position and not job.get('slice_probe_verified')):
+                    job.update(state='completed',updated_at=now(),message=(
+                        'Bounded daily probe did not return valid rows. Original history remains unresolved; no unavailable-data claim was inferred.'
+                        if not job.get('slice_probe_verified') else
+                        'Daily date-window recovery finished. Review each window outcome; original failed range remains retained.'))
+                    await asyncio.to_thread(self.save_job,job)
+                    return self.summary(job)
+                start,end=job['history_slices'][position]
+                task={**job['history_slice_task'],'from':start,'to':end}
             for _ in range(200):
                 if task:break
                 family,item=await asyncio.to_thread(self.select_item,job)
@@ -811,6 +831,8 @@ class Collector:
                     recovery_policy=(await asyncio.to_thread(self.store.document,'control/gap-recovery'))[0] or {}
                     quarantine=job['config'].get('quarantine_invalid_candles',False) or recovery_policy.get('enabled',False)
                     result=await asyncio.to_thread(self.persist_result,task,response,quarantine)
+                    if job.get('history_slices') and job['cursor']['window']==0:
+                        job['slice_probe_verified']=bool(result.get('rows'))
                     from research_archive import publish
                     await asyncio.to_thread(publish,self.store,task,response,result)
                     result['status']=('failed' if not result['rows'] and (result.get('quarantined_rows') or result.get('decode_failed_observations')) else
@@ -821,6 +843,7 @@ class Collector:
                 await asyncio.to_thread(install_once,self.store,'results/'+jid+'/'+key,entry)
                 job['counts'][result['status']]=job['counts'].get(result['status'],0)+1;job['rows_saved']+=result['rows'];job['items_assessed']+=1
                 job['retries']=0;job.pop('retry_at',None);job.pop('request_error',None)
+                job.pop('budget_wait_day',None)
                 if task['family']=='chain' and result.get('expiries'):
                     job['chain_pending']=[e for e in result['expiries'] if e>=datetime.now(IST).date().isoformat()]
                     job['chain_parent']=task
@@ -839,7 +862,14 @@ class Collector:
                 if code in AUTH_CODES or exc.status==401:
                     job['state']='token_required'
                 elif code=='BUDGET':
-                    job['state']='paused';job['provider_calls']=max(0,job['provider_calls']-1)
+                    # A daily guard is a timed wait, not an indefinite manual
+                    # pause. Keep this exact task and resume after IST rollover.
+                    local=datetime.now(IST)
+                    tomorrow=local.date()+timedelta(days=1)
+                    retry=datetime.combine(tomorrow,datetime.min.time(),tzinfo=IST)+timedelta(seconds=5)
+                    job['retry_at']=retry.timestamp();job['budget_wait_day']=local.date().isoformat()
+                    job['provider_calls']=max(0,job['provider_calls']-1)
+                    job['message']='Daily API guard reached. Waiting until '+retry.isoformat()+'; the same checkpoint resumes automatically.'
                 elif code in ACCESS_CODES or exc.status==403:
                     job['state']='permission_blocked'
                 elif exc.status==429 or code in ('DH-904','805'):
@@ -895,7 +925,7 @@ class Collector:
         return {'items':[{'key':k,**self.store.document(k)[0]} for k in names[:50]],
                 'next_cursor':names[49] if len(names)>50 else None}
 
-    def retry(self,jid,key,quarantine_invalid=False,child_id=None):
+    def retry(self,jid,key,quarantine_invalid=False,child_id=None,history_ranges=None):
         self.get_job(jid)
         if not key.startswith('results/'+jid+'/'):raise HTTPException(422,'Invalid result key')
         entry=self.store.document(key)[0]
@@ -904,6 +934,12 @@ class Collector:
         if entry['task']['family']=='rolling' and entry['task']['variant'].get('expiryCode') not in (1,2,3):
             raise HTTPException(422,'Invalid legacy rolling expiry code. Create a new Expired options plan; the original failure remains retained.')
         parent=self.get_job(jid)
+        if history_ranges is not None:
+            from gap_recovery import daily_probe_ranges
+            expected=daily_probe_ranges(entry['task'])
+            if (not expected or history_ranges!=expected or entry['result'].get('status')!='failed'
+                    or entry['result'].get('code') not in ('DH-905','DH-907') or entry['result'].get('http_status')!=400):
+                raise HTTPException(422,'Choose a validated long daily-history rejection for bounded recovery')
         if entry['task']['family']=='rolling' and entry['task']['item']['instrument']=='OPTIDX' and parent.get('rolling_identity_version')!=2:
             raise HTTPException(422,'Legacy rolling index identity requires a new Expired options plan; original results retained.')
         if child_id:
@@ -914,7 +950,16 @@ class Collector:
             'counts':{s:0 for s in TERMINAL},'items_assessed':0,'rows_saved':0,'retries':0,
             'provider_calls':0,'message':'Retry ready. Resume to retry this result.','retry_of':key,'force_fetch':True}
         child.pop('retry_at',None)
+        for inherited in ('chain_parent','chain_pending','request_error','system_error','budget_wait_day','history_slices','history_slice_task','slice_probe_verified'):
+            child.pop(inherited,None)
         child['config']={**parent['config']}
+        if history_ranges:
+            task=entry['task']
+            child.update(current=None,history_slices=history_ranges,history_slice_task=task,slice_probe_verified=False)
+            child['config'].update(start=task['from'],end=task['to'],families=['daily'],
+                symbols=[task['item']['symbol']],segments=[task['item']['segment']],
+                continue_rejected_requests=True,quarantine_invalid_candles=True)
+            child['message']='Bounded daily probe ready; earlier windows run only after valid source rows are observed.'
         if quarantine_invalid:child['config']['quarantine_invalid_candles']=True
         if entry['task']['family'] in ('quotes','live','depth20','depth200') and entry['result'].get('missing_security_ids'):
             missing=set(entry['result']['missing_security_ids'])
