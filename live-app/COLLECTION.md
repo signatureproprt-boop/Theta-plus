@@ -170,3 +170,39 @@ A stopped token-required plan needs an explicit Resume after updating the token.
 If the worker is not configured, the existing browser/terminal runner still works
 and is labelled accordingly. SDK/worker configuration is not proof of full historical
 coverage; inspect the collection ledger and coverage checks separately.
+
+## Whole-master instrument access
+
+**All instruments** searches every retained non-synthetic catalogue page, including
+unmapped identities with their recorded review reason. Filters use exact documented
+API segments; placeholder expiry dates do not remove cash equities or indices.
+Selection carries both the immutable catalogue SHA and entry key. A master change
+requires a new selection. Quotes also require a master no more than 24 hours old.
+
+The selected instrument can read its retained recorder observation without opening
+another socket, or use the Admin-protected quote/history actions. These actions use
+the existing Dhan connection, shared request lease and daily API budget. They never
+accept a client-supplied segment/security-ID override. Quotes preserve the raw
+response and timestamp limitations. History preserves its source before validation,
+then uses the existing exact-series candle store and requested-session grid checks.
+Rejected arrays do not become completed histories. Intraday requests accept the
+provider's 1/5/15/25/60-minute intervals and at most 31 completed dates; daily requests
+accept at most 366 completed dates. `To` is exclusive. Provider retention,
+entitlements and invalid/no-data responses remain explicit.
+
+Continuous recording has four 5,000-instrument marketfeed shards, leaving one of
+the documented five connections for the separately leased interactive research
+screen. Watch instruments and current NIFTY/BANKNIFTY options retain priority;
+remaining current, documented catalogue identities fill recorder slots in
+indices/futures, equities, then options order. Exact `(segment, security ID)` pairs
+are deduplicated. No `NSE_M` mapping is invented. Additional current identities use
+the existing all-catalogue quote/history sweeps and the selected-instrument actions.
+The status screen reports eligible count, capacity and overflow separately.
+These are subscription counts, not proof every subscribed instrument traded or
+sent frames. Depth limits remain 50 instruments for depth20 and one for depth200.
+Recorder receipts and last-trade times never substitute for exchange quote time.
+The release still reports `all_market_continuous: false`.
+
+The GitHub main-branch release workflow checks Python/JavaScript, verifies serving
+assets including the instrument screen, then activates and verifies the matching
+collector build. Its existing rollback guard remains in effect.

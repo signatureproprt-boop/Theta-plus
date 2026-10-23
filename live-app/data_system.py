@@ -7,7 +7,8 @@ import time
 import threading
 import uuid
 from datetime import datetime,timedelta,timezone,date
-from collection import CollectionPlan,digest,install_once,replace
+from collection import CollectionPlan,digest,install_once,replace,contract_expiry
+from sdk_feeds import SEGMENTS as FEED_SEGMENTS
 from gap_recovery import all_jobs
 from market_board import MarketBoard,parse_master
 from data_calendar import recent_closed_day,trading_state,session
@@ -16,6 +17,9 @@ from diagnostics import capture
 
 CONTROL='control/data-system'
 SCOPE='system/subscription-plan'
+LIVE_STREAMS=('live','live-extra','live-3','live-4')
+RECORDER_STREAMS=(*LIVE_STREAMS,'depth20','depth200')
+LIVE_CAPACITY=20000  # Four connections; reserve the fifth for interactive research.
 
 def now():return datetime.now(timezone.utc)
 
@@ -28,8 +32,11 @@ def subscription_plan(board,credential_revision='initial'):
               'label':f"{i['underlying'].upper()} {i['strike']:g} {i['side']}", 'role':'option','identity_verified':True}
              for sid,i in board.options.items() if i['expiry']>=now().astimezone(IST).date().isoformat()]
     options.sort(key=lambda i:(i['expiry'],i['underlying'],i['strike'],i['side']))
-    unique={(i['segment'],str(i['security_id'])):i for i in watch+options}
-    live=list(unique.values());selected=live[:10000]
+    unique={}
+    for i in watch+options+getattr(board,'live_catalogue',[]):
+        unique.setdefault((i['segment'],str(i['security_id'])),i)
+    live=list(unique.values());selected=live[:LIVE_CAPACITY]
+    candidate_count=max(len(live),getattr(board,'live_catalogue_total',0))
     # Full depth has different capacity. Keep exact identities stable in each
     # revision; a scope change is a recorded connection boundary, never continuity.
     futures=[i for i in watch if i.get('instrument')=='FUTIDX' and i['segment']=='NSE_FNO']
@@ -42,14 +49,16 @@ def subscription_plan(board,credential_revision='initial'):
             near+=sorted((i for i in candidates if i['expiry']==expiry),key=lambda i:(abs(i['strike']-prices[symbol]),i['side']))[:24]
     depth=futures+near
     one=next((i for i in futures if i.get('key')=='nifty_future'),None)
-    scopes={'live':selected[:5000],'live-extra':selected[5000:],'depth20':depth[:50],'depth200':[one] if one else []}
+    scopes={family:selected[n*5000:(n+1)*5000] for n,family in enumerate(LIVE_STREAMS)}
+    scopes.update(depth20=depth[:50],depth200=[one] if one else [])
     return {'revision':digest([scopes,credential_revision]),'generated_at':now().isoformat(),'scopes':scopes,
             'feed_revisions':{family:digest([family,scope,credential_revision]) for family,scope in scopes.items()},
-            'live_candidate_count':len(live),'live_capacity_excluded':max(0,len(live)-10000),
+            'live_candidate_count':candidate_count,'live_capacity_excluded':max(0,candidate_count-len(selected)),
+            'live_capacity':LIVE_CAPACITY,'interactive_connection_reserved':True,
             'depth20_candidate_count':len(futures)+len(options),'depth20_unsubscribed':max(0,len(futures)+len(options)-len(scopes['depth20'])),
             'depth20_scope':'Two current index futures and up to 48 nearest front-expiry NIFTY/BANKNIFTY option contracts',
             'depth200_scope':'Exact current NIFTY futures contract; one instrument capacity',
-            'scope':'Resolved watch instruments and all current NIFTY/BANKNIFTY options; broader catalogue uses quote/history sweeps',
+            'scope':'Verified current catalogue: watch and NIFTY/BANKNIFTY options first, then indices/futures, equities and remaining options within 20,000 recorder slots; overflow uses quote/history sweeps',
             'limits':{'live':5000,'depth20':50,'depth200':1},
             'unavailable':['Unresolved watch identities','Foreign feeds absent from verified Dhan master'],
             'all_market_continuous':False}
@@ -236,8 +245,9 @@ def publish_subscription_plan(store,plan,clock=None):
 def load_pinned_instruments(collector,board,catalogue,clock=None):
     """Resolve exact identities from the same immutable master as history jobs.
 
-    Avoid a second public-master download in every restarted worker. Only the
-    small watch/index-option page groups are read; no API segment is invented.
+    Avoid a second public-master download in every restarted worker. The
+    watch groups resolve research identities. All mapped current groups supply
+    bounded recorder candidates; no API segment is invented.
     """
     clock=clock or now();today=clock.astimezone(IST).date()
     try:
@@ -260,8 +270,26 @@ def load_pinned_instruments(collector,board,catalogue,clock=None):
     instruments,options=parse_master(text.getvalue(),today)
     if not instruments:raise ValueError('Pinned master has no resolved watch identities')
     board.instruments,board.options=instruments,options
-    board.master_day=today;board.master_at=time.monotonic();board.pinned_sha=sha
     board.catalog_error=None
+    def priority(page):
+        kind=page['group'].split('-',1)[-1]
+        return (0 if kind=='INDEX' or kind.startswith('FUT') else 1 if kind=='EQUITY' else 2,page['group'],page['key'])
+    pages=sorted((p for p in catalogue['pages'] if p['group']!='rolling-underlyings'),key=priority)
+    seen=set();candidates=[]
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        for offset in range(0,len(pages),4):
+            for items in pool.map(lambda p:collector.page_items(p['key']),pages[offset:offset+4]):
+                for item in items:
+                    expiry=contract_expiry(item)
+                    identity=(item.get('segment'),str(item.get('security_id','')))
+                    if (item.get('reason') or identity[0] not in FEED_SEGMENTS or not identity[1].isdigit()
+                            or (expiry and expiry<today.isoformat()) or identity in seen):continue
+                    seen.add(identity)
+                    if len(candidates)<LIVE_CAPACITY:
+                        candidates.append({**item,'expiry':expiry,'label':item.get('display') or item.get('symbol'),
+                                           'role':'catalogue','identity_verified':True})
+    board.live_catalogue=candidates;board.live_catalogue_total=len(seen)
+    board.master_day=today;board.master_at=time.monotonic();board.pinned_sha=sha
 
 
 def restore_subscriptions(store,credential_revision,clock=None):
@@ -373,7 +401,7 @@ async def supervise(collector,stop):
                     'instruments':cached.get('scopes',{}).get(family,[])}
     async def guarded(family):
         while await asyncio.to_thread(active):
-            try:await record(collector.provider,store,'live' if family=='live-extra' else family,scope,active,stream_id=family)
+            try:await record(collector.provider,store,'live' if family in LIVE_STREAMS else family,scope,active,stream_id=family)
             except asyncio.CancelledError:raise
             except Exception as error:
                 await asyncio.to_thread(capture,store,'recorder_supervisor',error)
@@ -383,7 +411,7 @@ async def supervise(collector,stop):
                 except asyncio.TimeoutError:pass
     async with asyncio.TaskGroup() as group:
         group.create_task(maintenance(collector,stop))
-        for family in ('live','live-extra','depth20','depth200'):group.create_task(guarded(family))
+        for family in RECORDER_STREAMS:group.create_task(guarded(family))
 
 def status(store,clock=None):
     from build_identity import runtime_build
@@ -398,7 +426,7 @@ def status(store,clock=None):
     except (TypeError,ValueError):worker_age=None
     active=lease_held and worker_age is not None and -5<=worker_age<=90
     streams={}
-    for family in ('live','live-extra','depth20','depth200'):
+    for family in RECORDER_STREAMS:
         data=store.document('system/recorder/'+family)[0] or {'state':'NOT_STARTED'}
         at=data.get('last_durable_received_at');heartbeat=data.get('heartbeat')
         def age(value):
@@ -419,7 +447,8 @@ def status(store,clock=None):
             'worker_build_matches':worker.get('build_id')==runtime_build(),
             'doctor_progress':doctor_progress,
             'subscribed':{k:len(v) for k,v in plan.get('scopes',{}).items()},
-            'live_capacity_excluded':plan.get('live_capacity_excluded'),'all_market_continuous':False,
+            'live_capacity_excluded':plan.get('live_capacity_excluded'),'live_candidate_count':plan.get('live_candidate_count'),
+            'live_capacity':plan.get('live_capacity',10000),'interactive_connection_reserved':plan.get('interactive_connection_reserved',True),'all_market_continuous':False,
             'depth20_unsubscribed':plan.get('depth20_unsubscribed'),'depth20_scope':plan.get('depth20_scope'),
             'streams':streams,'maintenance':store.document('system/maintenance')[0] or {},
             'quote_sweep':store.document('system/quote-sweep')[0] or {},
