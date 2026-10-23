@@ -697,11 +697,14 @@ class Collector:
             install_once(self.store,quarantine_key,{'series':series,'from':task['from'],'to':task['to'],
                          'received_at':response.get('received_at'),'excluded_rows':quarantined,
                          'policy':'Raw arrays retained; invalid rows excluded, never filled or corrected.'})
+        from history_grid import requested_grid
+        grid=requested_grid(task,by_day)
         return {'rows':len(observed),'duplicate_timestamps':duplicates,'outside_requested_dates':outside_range,'quality':'PARTIAL' if quarantined and observed else 'INVALID_ONLY' if quarantined else 'ROWS_PRESENT' if observed else 'EMPTY',
                 'quarantined_rows':len(quarantined),'quarantine_key':quarantine_key,
                 'precision_reconciled_rows':precision_rows,'precision_policy':'same_float32_within_0.005',
-                'session_validation':'Pending correct exchange calendar','days':len(by_day),'days_saved':sorted(by_day),'series':series,
-                'coverage':'PARTIAL_INVALID_ROWS' if quarantined else 'ROWS_PRESENT_UNVERIFIED' if observed else 'EMPTY_RETURNED',
+                'session_validation':'Requested regular-session grid checked' if grid.get('calendar_verified') else 'Pending correct exchange calendar',
+                'days':len(by_day),'days_saved':sorted(by_day),'series':series,
+                **grid,'coverage':'PARTIAL_INVALID_ROWS' if quarantined else grid['coverage'],
                 'requested_from':task['from'],'requested_to_exclusive':task['to'],
                 'first_returned_at':datetime.fromtimestamp(min(int(k.split(':')[0]) for k in observed),timezone.utc).isoformat() if observed else None,
                 'last_returned_at':datetime.fromtimestamp(max(int(k.split(':')[0]) for k in observed),timezone.utc).isoformat() if observed else None}
@@ -787,6 +790,13 @@ class Collector:
                             'instruments_assessed':len(task.get('batch',[task['item']]))}
                 else:
                     response,_=await asyncio.to_thread(self.store.document,raw_key)
+                    if response is not None and task['family'] in ('daily','intraday','rolling') and not job.get('force_fetch'):
+                        from history_grid import cache_is_closed
+                        if not cache_is_closed(task,response):
+                            # Preserve the pre-close response. A fresh immutable
+                            # archive belongs to this job, never to the old key.
+                            raw_key='responses/'+digest([key,jid,'closed-range-v1'])
+                            response,_=await asyncio.to_thread(self.store.document,raw_key)
                     if response is None:
                         job['provider_calls']+=1
                         if task['family']=='chain_snapshot':
@@ -801,7 +811,7 @@ class Collector:
                     from research_archive import publish
                     await asyncio.to_thread(publish,self.store,task,response,result)
                     result['status']=('failed' if not result['rows'] and (result.get('quarantined_rows') or result.get('decode_failed_observations')) else
-                                      'partial' if result['rows'] and (result.get('missing_security_ids') or result.get('quarantined_rows') or result.get('decode_failed_observations')) else
+                                      'partial' if result['rows'] and (result.get('missing_security_ids') or result.get('quarantined_rows') or result.get('decode_failed_observations') or result.get('missing_sessions') or result.get('missing_minutes')) else
                                       'completed' if result['rows'] else 'empty')
                     result['raw_key']=raw_key
                 entry={'task':task,'result':result,'checked_at':now()}

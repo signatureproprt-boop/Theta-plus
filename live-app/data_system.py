@@ -75,12 +75,13 @@ def credentials_saved(collector):
         if job['state']=='token_required':collector.control(job['id'],'resume');resumed+=1
     return {'enabled':True,'resumed':resumed}
 
-def ensure_job(collector,role,plan,identity):
+def ensure_job(collector,role,plan,identity,force_fetch=False):
     jid=digest(['data-system-v1',role,identity])[:32]
     result=collector.create(plan,job_id=jid)
     job=collector.get_job(jid)
-    if job.get('system_role')!=role:
-        job=replace(collector.store,'jobs/'+jid,lambda old:{**old,'system_role':role})
+    if job.get('system_role')!=role or (force_fetch and not job.get('force_fetch')):
+        job=replace(collector.store,'jobs/'+jid,lambda old:{**old,'system_role':role,
+                    **({'force_fetch':True} if force_fetch else {})})
     if result['state']=='paused' and not job.get('system_user_paused'):
         result=collector.control(jid,'resume')
     return result
@@ -91,11 +92,18 @@ def schedule_history(collector,clock=None):
     catalogue=collector.catalogue()
     if not catalogue:raise ValueError('Instrument catalogue unavailable')
     state=store.document('system/maintenance')[0] or {};slots=dict(state.get('history',{}))
-    specs={'core_daily':(['daily'],['NIFTY','BANKNIFTY'],['IDX_I']),
-           'core_intraday':(['intraday'],['NIFTY','BANKNIFTY'],['IDX_I']),
+    specs={'core_daily':(['daily'],['NIFTY','BANKNIFTY','INDIA VIX','INDIAVIX'],['IDX_I']),
+           'core_intraday':(['intraday'],['NIFTY','BANKNIFTY','INDIA VIX','INDIAVIX'],['IDX_I']),
+           'core_rolling':(['rolling'],['NIFTY','BANKNIFTY'],['NSE_FNO']),
+           'core_chains':(['chain'],['NIFTY','BANKNIFTY'],['IDX_I']),
            'all_daily':(['daily'],[],[]),'all_intraday':(['intraday'],[],[]),'all_rolling':(['rolling'],[],[])}
     for role,(families,symbols,segments) in specs.items():
         slot=dict(slots.get(role,{}));previous=collector.get_job(slot['job_id']) if slot.get('job_id') else None
+        if (role.startswith('core_') and slot.get('schedule_version')!=2
+                and (previous is None or previous['state'] in ('completed','no_work'))):
+            # A new, scoped plan repairs stale cache reuse and adds VIX/options.
+            # Old plans/outcomes retain their own immutable cursor and evidence.
+            slot={};previous=None
         if previous and previous['state'] not in ('completed','no_work'):
             slots[role]={**slot,'state':previous['state'],'counts':previous['counts']};continue
         if previous and previous['state']=='no_work':
@@ -108,9 +116,16 @@ def schedule_history(collector,clock=None):
         begin=attempted-timedelta(days=2) if attempted else target-timedelta(days=3)
         end=min(target,begin+timedelta(days=30))
         plan=CollectionPlan(start=begin,end=end,families=families,intervals=[1],symbols=symbols,segments=segments,
-                            continue_rejected_requests=True,quarantine_invalid_candles=True)
-        job=ensure_job(collector,role,plan,[begin.isoformat(),end.isoformat(),catalogue['sha256']])
+                            continue_rejected_requests=True,quarantine_invalid_candles=True,
+                            rolling_atm_baseline=role=='core_rolling')
+        # Overlapping catch-up must ask again. A raw response fetched before the
+        # requested day closed cannot establish that day's final coverage.
+        job=ensure_job(collector,role,plan,[begin.isoformat(),end.isoformat(),catalogue['sha256'],'fresh-history-v2'],force_fetch=True)
         slots[role]={'job_id':job['id'],'start':begin.isoformat(),'end':end.isoformat(),'state':job['state'],'counts':job['counts'],
+                     'schedule_version':2,
+                     'scope':('Monthly code 1 ATM CALL/PUT availability baseline; all-strike backfill remains separate' if role=='core_rolling' else
+                              'All returned current NIFTY/BANKNIFTY expiries; snapshots, not historical chain coverage' if role=='core_chains' else
+                              'Selected catalogue instruments; exact requested-session outcomes'),
                      'attempted_through':slot.get('end'),'verified_through':None,
                      'note':'Scheduled/attempted is not verified coverage. Failed, empty and partial outcomes remain gaps.'}
     replace(store,'system/maintenance',lambda old:{**(old or {}),'history':slots,'closed_day_target':closed.isoformat(),
@@ -353,8 +368,13 @@ async def supervise(collector,stop):
         for family in ('live','live-extra','depth20','depth200'):group.create_task(guarded(family))
 
 def status(store,clock=None):
+    from build_identity import runtime_build
     clock=clock or now();config=store.document(CONTROL)[0] or {};plan=store.document(SCOPE)[0] or {}
     worker=store.document('control/worker')[0] or {}
+    doctor=store.document('doctor/current')[0] or {}
+    # Public progress counters contain no Admin checks, raw records or findings
+    # details. The detailed diagnostic report keeps its existing Admin gate.
+    doctor_progress={k:doctor.get(k) for k in ('state','phase','started_at','updated_at','inspected','scan_errors')}
     lease_held=worker.get('until',0)>clock.timestamp()
     try:worker_age=(clock-datetime.fromisoformat(worker.get('heartbeat'))).total_seconds()
     except (TypeError,ValueError):worker_age=None
@@ -377,6 +397,9 @@ def status(store,clock=None):
     return {'enabled':bool(config.get('enabled')),'scope':plan.get('scope'),'subscription_revision':plan.get('revision'),
             'discovery_state':plan.get('discovery_state'),'scope_warning':plan.get('scope_warning'),
             'worker_active':active,'worker_lease_held':lease_held,'worker_heartbeat':worker.get('heartbeat'),
+            'worker_build_id':worker.get('build_id'),'expected_worker_build_id':runtime_build(),
+            'worker_build_matches':worker.get('build_id')==runtime_build(),
+            'doctor_progress':doctor_progress,
             'subscribed':{k:len(v) for k,v in plan.get('scopes',{}).items()},
             'live_capacity_excluded':plan.get('live_capacity_excluded'),'all_market_continuous':False,
             'depth20_unsubscribed':plan.get('depth20_unsubscribed'),'depth20_scope':plan.get('depth20_scope'),

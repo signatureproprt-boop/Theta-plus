@@ -41,7 +41,11 @@ def activate(expected_image):
         if remaining%60==10:print(f'Worker handover: waiting {remaining}s for durable leases.',flush=True)
         time.sleep(10)
     verify()
-    if active_executions():raise RuntimeError('Another collector started; activation stopped to avoid overlap')
+    if active_executions():
+        # The existing private watchdog can win this race after lease expiry.
+        # Do not cancel or duplicate it; the next rollout gate checks its build.
+        print('Collector already started during handover; running build acceptance is required.')
+        return
     gcloud('run','jobs','execute',JOB,'--async','--quiet')
     print('New collector execution requested on the verified image; live outcomes still require verification.')
 

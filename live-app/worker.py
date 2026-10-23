@@ -9,6 +9,7 @@ from collection import Collector,replace,now
 from credentials import DhanCredentials
 from provider import Dhan
 from diagnostics import capture
+from build_identity import runtime_build
 from google.api_core.exceptions import Aborted,DeadlineExceeded,ServiceUnavailable,TooManyRequests,InternalServerError
 
 class WorkerLeaseLost(RuntimeError):pass
@@ -19,6 +20,8 @@ def worker_status(store):
     data=store.document('control/worker')[0] or {}
     return {'configured':bool(RESOURCE.fullmatch(os.environ.get('THETA_COLLECTION_WORKER',''))),
             'active':data.get('until',0)>time.time(),
+            'build_id':data.get('build_id'),'expected_build_id':runtime_build(),
+            'build_matches':data.get('build_id')==runtime_build(),
             'heartbeat':data.get('heartbeat'),'state':data.get('state','idle')}
 
 def launch_worker(store):
@@ -79,7 +82,8 @@ async def run_worker(collector,max_seconds=23*3600):
         # remain excluded. The deployed job has exactly one task.
         same_execution=bool(execution and old and old.get('execution')==execution)
         if old and old.get('until',0)>time.time() and not same_execution:return old
-        claimed=True;return {'owner':owner,'execution':execution,'until':time.time()+600,'heartbeat':now(),'state':'running'}
+        claimed=True;return {'owner':owner,'execution':execution,'until':time.time()+600,'heartbeat':now(),
+                             'build_id':runtime_build(),'state':'running'}
     await asyncio.to_thread(replace,store,'control/worker',claim)
     if not claimed:return
     started=time.monotonic()

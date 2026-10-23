@@ -60,3 +60,9 @@ jobs:
       - name: Deploy and verify candidate with rollback
         working-directory: live-app
         run: bash deploy/release-existing.sh
+      - name: Activate verified collector with checkpoint handover
+        working-directory: live-app
+        run: python3 deploy/activate_worker.py
+      - name: Verify collector release and heartbeat
+        working-directory: live-app
+        run: python3 deploy/check_worker_release.py

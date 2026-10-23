@@ -94,13 +94,13 @@ def test_resume_restart_idempotent_raw_and_normalized(setup,monkeypatch):
     c,p,s=setup
     jid=plan(c)
     result=run(c,jid)
-    assert result['counts']['completed']==1 and result['rows_saved']==1
+    assert result['counts']['partial']==1 and result['rows_saved']==1
     assert len(p.calls)==1
     assert run(c,jid)['state']=='completed'
     # A new process/job reuses the persisted raw response.
     other=Collector(p,s)
     jid2=plan(other)
-    assert run(other,jid2)['counts']['completed']==1
+    assert run(other,jid2)['counts']['partial']==1
     assert len(p.calls)==1
     names=s.document_names('candles/')
     assert len(names)==1 and len(s.document(names[0])[0]['candles'])==1
@@ -119,7 +119,7 @@ def test_token_expiry_preserves_cursor_then_resume(setup):
     assert result['state']=='token_required' and result['items_assessed']==0
     checkpoint=c.get_job(jid)['current']
     p.problem=None;c.control(jid,'resume')
-    assert run(c,jid)['counts']['completed']==1
+    assert run(c,jid)['counts']['partial']==1
     assert checkpoint['from']=='2026-10-16'
 
 def test_permissions_are_explicit_and_can_continue(setup):
@@ -138,7 +138,7 @@ def test_pause_wins_over_inflight_result(setup):
         return candles()
     c.call=during
     assert run(c,jid)['state']=='paused'
-    assert c.get_job(jid)['counts']['completed']==1
+    assert c.get_job(jid)['counts']['partial']==1
     assert len(c.results(jid)['items'])==1
 
 def test_empty_is_explicit_and_retry_refetches(setup):
@@ -147,7 +147,7 @@ def test_empty_is_explicit_and_retry_refetches(setup):
     entry=c.results(jid)['items'][0]
     retry=c.retry(jid,entry['key'])
     p.answer=None;c.control(retry['id'],'resume')
-    assert run(c,retry['id'])['counts']['completed']==1
+    assert run(c,retry['id'])['counts']['partial']==1
     assert len(p.calls)==2
 
 def test_bad_arrays_record_failure_without_inventing_candles(setup):
@@ -368,7 +368,7 @@ def test_rejected_request_stops_without_losing_task_or_claiming_coverage(setup,c
     run(c,jid)
     assert len(p.calls)==1
     p.problem=None;c.control(jid,'resume')
-    assert run(c,jid)['counts']['completed']==1
+    assert run(c,jid)['counts']['partial']==1
     assert len(p.calls)==2
 
 
@@ -397,7 +397,7 @@ def test_existing_nifty_catalogue_placeholder_does_not_skip_history(setup,family
     value['items'][0]['expiry']='0001-01-01';s.put_document(page,value,v)
     jid=c.create(CollectionPlan(start='2026-10-16',end='2026-10-17',families=[family],segments=['IDX_I'],symbols=['NIFTY']))['id']
     c.control(jid,'resume');result=run(c,jid)
-    assert result['counts']['completed']==1 and result['rows_saved']==1
+    assert result['counts']['partial' if family=='intraday' else 'completed']==1 and result['rows_saved']==1
     assert result['provider_calls']==1 and p.calls[0][1]['securityId']=='13'
     assert s.document(page)[0]['items'][0]['expiry']=='0001-01-01'
     assert run(c,jid)['state']=='completed'
@@ -449,7 +449,7 @@ def test_continue_rejections_is_explicit_failed_outcome_not_coverage(setup):
     entry=c.results(jid)['items'][0]
     assert entry['result']['coverage']=='NOT_COLLECTED' and entry['result']['review_required']
     assert entry['task']['item']['security_id']=='13' and entry['result']['code']=='DH-907'
-    assert run(c,jid)['counts']['completed']==1
+    assert run(c,jid)['counts']['partial']==1
     last=run(c,jid);assert last['state']=='completed' and last['counts']['failed']==1
     assert last['rows_saved']==1 and len(p.calls)==2
 
