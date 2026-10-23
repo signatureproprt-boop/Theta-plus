@@ -109,6 +109,11 @@ def create_app(db_path=None):
         result['markets']=board.view()
         return result
 
+    @app.get('/api/data-validator')
+    def live_data_validator(symbol:Literal['nifty','banknifty','india_vix']|None=None):
+        from data_validator import report
+        return report(store,symbol=symbol)
+
     @app.post('/api/research/risk')
     def research_risk(payload:RiskInput):
         return risk_plan(payload)

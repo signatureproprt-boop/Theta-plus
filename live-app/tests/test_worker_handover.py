@@ -46,3 +46,28 @@ def test_overlapping_new_execution_is_never_cancelled_or_duplicated(monkeypatch)
     monkeypatch.setattr(m,'gcloud',run)
     m.activate('repo@sha256:new')
     assert not any('execute' in c or 'cancel' in c for c in calls)
+
+def test_verified_durable_lease_release_avoids_unnecessary_market_gap(monkeypatch):
+    calls=[];sleeps=[]
+    monkeypatch.setattr(m,'active_executions',lambda:[])
+    monkeypatch.setattr(m.time,'sleep',sleeps.append)
+    def run(*args):
+        calls.append(args)
+        return json.dumps({'spec':{'template':{'spec':{'template':{'spec':{'containers':[{'image':'repo@sha256:new'}]}}}}}})
+    monkeypatch.setattr(m,'gcloud',run)
+    checks=iter([False,True])
+    m.activate('repo@sha256:new',lease_check=lambda:next(checks))
+    assert sleeps==[10] and calls[-1]==('run','jobs','execute',m.JOB,'--async','--quiet')
+
+@pytest.mark.parametrize('lease,active,build,expected',[(False,False,'fixture',True),(True,False,'fixture',False),(False,True,'fixture',False),(False,False,'old',False),(None,False,'fixture',False)])
+def test_public_release_probe_requires_exact_negative_lease_and_matching_build(monkeypatch,lease,active,build,expected):
+    import io
+    import urllib.request
+    import check_worker_release
+    monkeypatch.setattr(check_worker_release,'runtime_build',lambda:'fixture')
+    data={'worker_lease_held':lease,'worker_active':active,'expected_worker_build_id':build}
+    def fetch(request,timeout):
+        assert request.full_url==check_worker_release.URL and timeout==8
+        return io.StringIO(json.dumps(data))
+    monkeypatch.setattr(urllib.request,'urlopen',fetch)
+    assert m.durable_lease_released() is expected

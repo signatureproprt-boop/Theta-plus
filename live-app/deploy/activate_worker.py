@@ -22,7 +22,18 @@ def active_executions():
     return active
 
 
-def activate(expected_image):
+def durable_lease_released():
+    """Public read-only evidence, pinned to the deployed source fingerprint."""
+    from check_worker_release import URL,runtime_build
+    from urllib.request import urlopen,Request
+    try:
+        with urlopen(Request(URL,headers={'Cache-Control':'no-cache'}),timeout=8) as response:data=json.load(response)
+        return (data.get('worker_lease_held') is False and data.get('worker_active') is False
+                and data.get('expected_worker_build_id')==runtime_build())
+    except Exception:return False
+
+
+def activate(expected_image,lease_check=None):
     if '@sha256:' not in expected_image:raise ValueError('Immutable image required')
     def verify():
         job=json.loads(gcloud('run','jobs','describe',JOB,'--format=json'))
@@ -38,6 +49,11 @@ def activate(expected_image):
     # Also handles a lease left by a recently terminated execution. Do not
     # delete or edit it: the last checkpoint remains authoritative.
     for remaining in range(610,0,-10):
+        # A graceful stop releases its own durable lease. Read that evidence;
+        # never delete a lease, or assume a stopped execution released it.
+        if lease_check and lease_check():
+            print('Durable collector lease release verified; expiry wait is no longer required.',flush=True)
+            break
         if remaining%60==10:print(f'Worker handover: waiting {remaining}s for durable leases.',flush=True)
         time.sleep(10)
     verify()
@@ -56,4 +72,4 @@ if __name__=='__main__':
     if len(traffic)!=1 or traffic[0]['percent']!=100:raise SystemExit('One verified serving revision required')
     candidate=json.loads(gcloud('run','revisions','describe',traffic[0]['revisionName'],'--format=json'))
     if not re.fullmatch(r'theta-plus-f380-[0-9]{14}',traffic[0]['revisionName']):raise SystemExit('Collector repair release must be serving first')
-    activate(candidate['status']['imageDigest'])
+    activate(candidate['status']['imageDigest'],lease_check=durable_lease_released)
