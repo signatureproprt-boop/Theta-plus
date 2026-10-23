@@ -172,7 +172,9 @@ def adopt_sweep(collector,family,clock):
 
 def bootstrap_history(collector,clock=None):
     clock=clock or now();store=collector.store
-    if store.document('system/backfill')[0]:return
+    if store.document('system/backfill')[0]:
+        from catalogue_backfill import schedule
+        return schedule(collector,clock)
     today=clock.astimezone(IST).date()
     try:begin=today.replace(year=today.year-5)
     except ValueError:begin=today.replace(year=today.year-5,day=28)
@@ -453,7 +455,8 @@ def status(store,clock=None):
             'streams':streams,'maintenance':store.document('system/maintenance')[0] or {},
             'quote_sweep':store.document('system/quote-sweep')[0] or {},
             'chain_sweep':store.document('system/chain-sweep')[0] or {},
-            'backfill':store.document('system/backfill')[0] or {},
+            'backfill':{**(store.document('system/backfill')[0] or {}),
+                        'catalogue_updates':store.document('system/backfill-catalogue')[0] or {}},
             'audit':store.document('system/data-audit')[0] or {},
             'diagnostics':store.document('system/diagnostics')[0] or {},
             'watchdog':store.document('control/data-watchdog')[0] or {'verified':False},

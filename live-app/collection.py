@@ -262,12 +262,12 @@ class Collector:
         job['pages']=new;job['cursor']={'page':start,'item':0,'variant':0,'window':0}
         job['chain_planner_version']=2;job['chain_discovery']=planned['discovery']
 
-    def create(self,plan,job_id=None):
+    def create(self,plan,job_id=None,*,catalogue=None):
         if job_id:
             if len(job_id)!=32 or any(c not in '0123456789abcdef' for c in job_id):raise ValueError('Invalid internal job identity')
             existing=self.store.document('jobs/'+job_id)[0]
             if existing:return self.summary(existing)
-        cat=self.catalogue()
+        cat=catalogue if catalogue is not None else self.catalogue()
         if not cat:raise HTTPException(409,'Refresh instrument catalogue first')
         config=plan.model_dump(mode='json')
         # Preserve every entry; filters select groups, never silently rewrite master.

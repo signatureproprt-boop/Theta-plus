@@ -264,3 +264,14 @@ test('segment support check uses Admin and labels the unchanged catalogue',async
  assert.match(e.element('collection-feedback').textContent,/Catalogue mapping unchanged/);
  assert.equal(e.calls.filter(([url])=>url.endsWith('/catalogue/refresh')).length,0);
 });
+
+test('catalogue additions show the history job without claiming completed coverage',async()=>{
+ const jid='b'.repeat(32);
+ const e=environment('completed',{responses:{'/api/data-system':{ok:true,status:200,text:async()=>JSON.stringify({backfill:{catalogue_updates:{families:{daily:{added_identities:3,job_id:jid},rolling:{added_identities:0,job_id:null}}}}})}}});
+ await e.flush();await e.click('data-system-refresh');
+ const html=e.element('data-system-status').innerHTML;
+ assert.match(html,/New catalogue history/);
+ assert.match(html,new RegExp('data-collection-job="'+jid+'"'));
+ assert.match(html,/Queued work does not establish completed coverage/);
+ assert.match(html,/No additions in this update/);
+});
