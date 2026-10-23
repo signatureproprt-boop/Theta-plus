@@ -442,11 +442,14 @@ def workspace(store,symbol,clock=None,options=None,contract_id=''):
         {'item':'Option backtest','state':'EXACT_CONTRACT_HISTORY_REQUIRED','next':'Rolling ATM history does not establish exact expiry/strike execution or bid/ask.'},
         {'item':'Paper validation','state':'ACTUAL_FORWARD_TRADES_REQUIRED','next':'50+ verified forward paper trades across regimes; manual hypothetical entries do not certify accuracy.'},
     ]
-    return {'readiness':readiness,'futures_context':futures,'symbol':symbol,'server_time':clock.isoformat(),'mode':'READ_ONLY_RESEARCH','rule_version':RULE_VERSION,
+    from data_validator import report,gate
+    validation=report(store,clock,symbol)
+    setups=gate([setup_rules(candles,clock,s,contract=contract,breadth=breadth,indicator_view=indicator_view) for s in ('opening_range','trend_pullback')],validation)
+    return {'readiness':readiness,'data_validator':validation,'futures_context':futures,'symbol':symbol,'server_time':clock.isoformat(),'mode':'READ_ONLY_RESEARCH','rule_version':RULE_VERSION,
             'session_quality':session_quality,
             'policies':POLICY,'history':loaded,'indicators':indicator_view,'indicator_chart':indicator_chart,
             'latest_candle':latest,'candle_freshness':freshness(latest['closed_at'],latest['received_at'],clock,90) if latest else {'state':'MISSING'},
-            'breadth':breadth,'chain':chain,'selected_contract':contract,'setups':[setup_rules(candles,clock,s,contract=contract,breadth=breadth,indicator_view=indicator_view) for s in ('opening_range','trend_pullback')],
+            'breadth':breadth,'chain':chain,'selected_contract':contract,'setups':setups,
             'availability':{'breadth':breadth['state'],'events':'NOT_CONNECTED','futures_vwap':futures['state'],
                             'continuous_feed':'SEE_LIVE_PANEL_STATUS','iv_percentile':'HISTORY_UNVERIFIED','pcr_history':'CADENCE_UNVERIFIED'},
             'validation':{'rule_state':'UNVALIDATED','paper_trade_minimum':50,'multiple_regimes_required':True,

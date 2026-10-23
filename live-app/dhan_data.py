@@ -105,6 +105,8 @@ async def fetch_chain(provider,store,index,instrument):
               'strikes':len(oc),'fetched_at':datetime.now(timezone.utc).isoformat(),
               'time_basis':'server receipt; no exchange quote timestamp in chain response'}
     record_id=store.add('dhan_chain',{'metadata':metadata,'raw':raw})
+    from collection import replace
+    replace(store,'research/current-chain/'+index,lambda old:{'metadata':metadata,'raw':raw} if not old or old.get('metadata',{}).get('fetched_at','')<=metadata['fetched_at'] else old)
     return {'id':record_id,**metadata}
 
 def verify_record(record):

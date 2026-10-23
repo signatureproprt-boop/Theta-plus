@@ -238,3 +238,11 @@ test('live chart ticks reuse timezone formatters over a large retained history a
   assert.match(e.element('research-indicator-values').innerHTML,/88.123|88.12/);
   assert.match(e.element('research-indicator-values').innerHTML,/RSI14/);
  });
+
+test('live validator renders blocked checks with escaped evidence without provider writes',async()=>{
+  const e=environment('quality',{data_validator:{state:'BLOCKED',checked_at:'2026-10-23T04:00:00Z',blocked_checks:1,checks:[{check:'nifty candles',state:'BLOCKED',detail:'<bad-source>',expected_minutes:45,observed_minutes:44,missing_minutes:1,conflicting_minutes:0,duplicate_rows:0}]}});
+  await e.flush();const html=e.element('page-quality').innerHTML;
+  assert.match(html,/Live data validator · BLOCKED/);assert.match(html,/44\/45 minutes/);
+  assert.match(html,/&lt;bad-source&gt;/);assert.doesNotMatch(html,/<bad-source>/);
+  assert.ok(e.calls.every(c=>!c.o.method||c.o.method==='GET'));
+});

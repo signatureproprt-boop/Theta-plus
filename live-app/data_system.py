@@ -293,6 +293,27 @@ def restore_subscriptions(store,credential_revision,clock=None):
     return restored
 
 
+async def refresh_current(collector,board,failed):
+    from session_chart import refresh_session
+    from dhan_data import fetch_chain
+    store=collector.store
+    for symbol in ('nifty','banknifty','india_vix'):
+        try:
+            await refresh_session(collector.provider,store,board,symbol)
+        except asyncio.CancelledError:raise
+        except Exception as error:await failed('current_session_'+symbol,error)
+        if symbol=='india_vix':continue
+        # Chain/context refresh must continue if candles fail.
+        try:
+            if board.instruments.get(symbol):await fetch_chain(collector.provider,store,symbol,board.instruments[symbol])
+        except asyncio.CancelledError:raise
+        except Exception as error:await failed('current_chain_'+symbol,error)
+        try:
+            from session_chart import refresh_context
+            await refresh_context(collector.provider,store,board,symbol)
+        except asyncio.CancelledError:raise
+        except Exception as error:await failed('current_context_'+symbol,error)
+
 async def maintenance(collector,stop):
     from dhan_data import fetch_chain
     from session_chart import refresh_session
@@ -330,12 +351,7 @@ async def maintenance(collector,stop):
             except asyncio.CancelledError:raise
             except Exception as error:await failed(stage,error)
         if trading_state(now())=='OPEN':
-            for symbol in ('nifty','banknifty'):
-                try:
-                    await refresh_session(collector.provider,store,board,symbol)
-                    if board.instruments.get(symbol):await fetch_chain(collector.provider,store,symbol,board.instruments[symbol])
-                except asyncio.CancelledError:raise
-                except Exception as error:await failed('current_session',error)
+            await refresh_current(collector,board,failed)
         await asyncio.to_thread(replace,store,'system/maintenance',lambda old:{**(old or {}),
             'state':'DEGRADED' if errors else 'RUNNING','heartbeat':now().isoformat(),'component_errors':errors,
             'error':'Some components need review; independent collection continues. See diagnostics.' if errors else None})

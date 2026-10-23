@@ -7,6 +7,26 @@ from research import stamp,freshness
 from runtime import IST
 from data_calendar import session
 
+async def intraday_window(provider,body):
+    """One bounded wider-date probe for rejected same-day requests.
+
+    Some provider responses reject an otherwise valid same-calendar-date
+    window. Preserve both requests; only original-session closed bars are used.
+    Authentication, rate-limit and transport errors are never retried here.
+    """
+    attempts=[]
+    try:
+        raw=await provider.post('charts/intraday',body)
+    except ProviderError as error:
+        if error.code not in ('DH-905','DH-907') or body['fromDate'][:10]!=body['toDate'][:10]:raise
+        attempts.append({'request':dict(body),'state':'REJECTED','code':error.code})
+        wider={**body,'fromDate':(datetime.fromisoformat(body['fromDate'])-timedelta(days=1)).replace(hour=0,minute=0,second=0).strftime('%Y-%m-%d %H:%M:%S')}
+        raw=await provider.post('charts/intraday',wider)
+        body=wider
+    candle_count(raw)
+    attempts.append({'request':dict(body),'state':'RETURNED','rows':len(raw['timestamp'])})
+    return raw,body,attempts
+
 def session_view(record,clock):
     day=clock.astimezone(IST).date()
     start=datetime.combine(day,datetime.min.time(),IST).replace(hour=9,minute=15)
@@ -53,11 +73,11 @@ async def refresh_session(provider,store,board,symbol,clock=None):
     else:
         body={'securityId':str(item['security_id']),'exchangeSegment':'IDX_I','instrument':'INDEX',
               'interval':'1','oi':False,'fromDate':(start-timedelta(minutes=1)).strftime('%Y-%m-%d %H:%M:%S'),'toDate':end.strftime('%Y-%m-%d %H:%M:%S')}
-        raw=await provider.post('charts/intraday',body)
-        candle_count(raw)
+        raw,body,attempts=await intraday_window(provider,body)
     received=clock if fixed_clock else datetime.now(timezone.utc)
     record={'symbol':symbol,'security_id':str(item['security_id']),'session_date':day.isoformat(),
-            'received_at':received.isoformat(),'request':body,'raw':raw}
+            'received_at':received.isoformat(),'request':body,'raw':raw,
+            'request_attempts':attempts if body else []}
     # Replace one bounded document. Do not append 375-bar snapshots to legacy history.
     from collection import replace
     await asyncio.to_thread(replace,store,key,lambda previous:record if not previous or (stamp(previous.get('received_at')) or datetime.min.replace(tzinfo=timezone.utc))<=received else previous)
@@ -91,9 +111,9 @@ async def refresh_context(provider,store,board,symbol):
     body={'securityId':str(future['security_id']),'exchangeSegment':'NSE_FNO','instrument':'FUTIDX','interval':'1','oi':True,
           'fromDate':(start-timedelta(minutes=1)).strftime('%Y-%m-%d %H:%M:%S'),'toDate':end.strftime('%Y-%m-%d %H:%M:%S')}
     try:
-        raw=await provider.post('charts/intraday',body);candle_count(raw)
+        raw,body,attempts=await intraday_window(provider,body)
         record={'symbol':symbol,'security_id':str(future['security_id']),'expiry':future['expiry'],'session_date':day.isoformat(),
-                'received_at':datetime.now(timezone.utc).isoformat(),'request':body,'raw':raw}
+                'received_at':datetime.now(timezone.utc).isoformat(),'request':body,'raw':raw,'request_attempts':attempts}
         await asyncio.to_thread(replace,store,key,lambda previous:record)
         return {**report,'futures_vwap':future_vwap(record,datetime.now(timezone.utc))}
     except ProviderError as exc:return {**report,'futures_vwap':{'state':'PROVIDER_ERROR','value':None,'reason':str(exc)}}
