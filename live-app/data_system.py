@@ -273,7 +273,7 @@ def load_pinned_instruments(collector,board,catalogue,clock=None):
     board.catalog_error=None
     def priority(page):
         kind=page['group'].split('-',1)[-1]
-        return (0 if kind=='INDEX' or kind.startswith('FUT') else 1 if kind=='EQUITY' else 2,page['group'],page['key'])
+        return (0 if kind=='INDEX' or kind.startswith('FUT') else 1 if kind=='EQUITY' else 2,0 if page['group'].startswith('NSE_EQ-') else 1,page['group'],page['key'])
     pages=sorted((p for p in catalogue['pages'] if p['group']!='rolling-underlyings'),key=priority)
     seen=set();candidates=[]
     with ThreadPoolExecutor(max_workers=4) as pool:
