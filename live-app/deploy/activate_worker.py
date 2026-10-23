@@ -7,8 +7,18 @@ No storage, IAM, secrets, task counts or environment values are changed.
 """
 import json
 import re
+import subprocess
 import time
 from sync_worker_image import gcloud, JOB, job_image
+
+
+def execution_terminal(entry):
+    status=entry.get('status',{})
+    if status.get('completionTime'):return True
+    # Failed/cancelled executions can have a terminal Completed condition
+    # before completionTime is populated. Zero running tasks alone is not proof.
+    return any(c.get('type')=='Completed' and c.get('status') in ('True','False')
+               for c in status.get('conditions',[]))
 
 
 def active_executions():
@@ -18,7 +28,7 @@ def active_executions():
         name=entry['metadata']['name']
         if not re.fullmatch(re.escape(JOB)+r'-[a-z0-9]+',name):
             raise ValueError('Unexpected collector execution identity; handover stopped')
-        if not entry.get('status',{}).get('completionTime'):active.append(name)
+        if not execution_terminal(entry):active.append(name)
     return active
 
 
@@ -41,7 +51,12 @@ def activate(expected_image,lease_check=None):
     verify()
     active=active_executions()
     for name in active:
-        gcloud('run','jobs','executions','cancel',name,'--no-async','--quiet')
+        try:gcloud('run','jobs','executions','cancel',name,'--no-async','--quiet')
+        except subprocess.CalledProcessError:
+            # It may have finished between list and cancel. Accept only fresh
+            # terminal evidence; permission/network failures still stop rollout.
+            entry=json.loads(gcloud('run','jobs','executions','describe',name,'--format=json'))
+            if entry.get('metadata',{}).get('name')!=name or not execution_terminal(entry):raise
     deadline=time.monotonic()+180
     while active_executions():
         if time.monotonic()>=deadline:raise RuntimeError('Collector still running; no new execution started')

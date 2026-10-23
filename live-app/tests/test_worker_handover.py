@@ -71,3 +71,33 @@ def test_public_release_probe_requires_exact_negative_lease_and_matching_build(m
         return io.StringIO(json.dumps(data))
     monkeypatch.setattr(urllib.request,'urlopen',fetch)
     assert m.durable_lease_released() is expected
+
+@pytest.mark.parametrize('status,terminal',[
+    ({'conditions':[{'type':'Completed','status':'False','reason':'Cancelled'}]},True),
+    ({'conditions':[{'type':'Completed','status':'True'}]},True),
+    ({'runningCount':0,'conditions':[{'type':'Completed','status':'Unknown'}]},False),
+    ({'runningCount':0},False),
+])
+def test_terminal_condition_without_completion_timestamp(status,terminal):
+    assert m.execution_terminal({'status':status}) is terminal
+
+@pytest.mark.parametrize('terminal',[True,False])
+def test_cancel_race_requires_fresh_terminal_evidence(monkeypatch,terminal):
+    import subprocess
+    calls=[];count=[0]
+    def active():
+        count[0]+=1
+        return [m.JOB+'-abc12'] if count[0]==1 else []
+    def run(*args):
+        calls.append(args)
+        if 'cancel' in args:raise subprocess.CalledProcessError(1,['gcloud'])
+        if 'executions' in args and 'describe' in args:
+            return json.dumps({'metadata':{'name':m.JOB+'-abc12'},'status':{'conditions':[{'type':'Completed','status':'False' if terminal else 'Unknown'}]}})
+        return json.dumps({'spec':{'template':{'spec':{'template':{'spec':{'containers':[{'image':'repo@sha256:new'}]}}}}}})
+    monkeypatch.setattr(m,'active_executions',active)
+    monkeypatch.setattr(m,'gcloud',run)
+    monkeypatch.setattr(m.time,'sleep',lambda _:None)
+    if terminal:m.activate('repo@sha256:new',lease_check=lambda:True)
+    else:
+        with pytest.raises(subprocess.CalledProcessError):m.activate('repo@sha256:new',lease_check=lambda:True)
+    assert any('execute' in c for c in calls) is terminal
