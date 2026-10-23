@@ -17,6 +17,10 @@ def all_jobs(store):
 
 def eligible(entry):
     result=entry['result'];family=entry['task']['family']
+    if result.get('status')=='partial' and family in ('daily','intraday','rolling'):
+        # One deterministic retry via tick; an unchanged empty/provider rejection
+        # remains visible. Whole absent days count, not only holes between rows.
+        return bool(result.get('calendar_verified') and (result.get('missing_sessions') or result.get('missing_minutes')))
     if result.get('status')=='partial' and result.get('missing_security_ids'):
         return family in ('quotes','live','depth20','depth200')
     if result.get('status')!='failed':return False
