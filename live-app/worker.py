@@ -4,6 +4,7 @@ import os
 import re
 import time
 import uuid
+import signal
 from fastapi import HTTPException
 from collection import Collector,replace,now
 from credentials import DhanCredentials
@@ -176,11 +177,20 @@ async def run_worker(collector,max_seconds=23*3600):
         await asyncio.to_thread(launch_worker,store)
 
 
+async def serve(collector):
+    """Let Cloud Run SIGTERM drain checkpoints and release our own lease."""
+    loop=asyncio.get_running_loop();task=asyncio.current_task()
+    loop.add_signal_handler(signal.SIGTERM,task.cancel)
+    try:await run_worker(collector)
+    except asyncio.CancelledError:pass
+    finally:loop.remove_signal_handler(signal.SIGTERM)
+
+
 def main():
     bucket=os.environ.get('THETA_GCS_BUCKET')
     if not bucket:raise RuntimeError('Worker requires the existing durable GCS bucket')
     from cloud_store import CloudStore
     store=CloudStore(bucket)
-    asyncio.run(run_worker(Collector(Dhan(DhanCredentials(),store=store),store)))
+    asyncio.run(serve(Collector(Dhan(DhanCredentials(),store=store),store)))
 
 if __name__=='__main__':main()

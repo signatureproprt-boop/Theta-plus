@@ -44,6 +44,7 @@ def subscription_plan(board,credential_revision='initial'):
     one=next((i for i in futures if i.get('key')=='nifty_future'),None)
     scopes={'live':selected[:5000],'live-extra':selected[5000:],'depth20':depth[:50],'depth200':[one] if one else []}
     return {'revision':digest([scopes,credential_revision]),'generated_at':now().isoformat(),'scopes':scopes,
+            'feed_revisions':{family:digest([family,scope,credential_revision]) for family,scope in scopes.items()},
             'live_candidate_count':len(live),'live_capacity_excluded':max(0,len(live)-10000),
             'depth20_candidate_count':len(futures)+len(options),'depth20_unsubscribed':max(0,len(futures)+len(options)-len(scopes['depth20'])),
             'depth20_scope':'Two current index futures and up to 48 nearest front-expiry NIFTY/BANKNIFTY option contracts',
@@ -368,7 +369,8 @@ async def supervise(collector,stop):
             head=store.document('system/subscription-revision')[0] or {}
             if not cached or cached.get('revision')!=head.get('revision'):
                 plan=store.document(SCOPE)[0] or {};cached.clear();cached.update(plan)
-            return {'revision':cached.get('revision'),'instruments':cached.get('scopes',{}).get(family,[])}
+            return {'revision':cached.get('feed_revisions',{}).get(family,cached.get('revision')),
+                    'instruments':cached.get('scopes',{}).get(family,[])}
     async def guarded(family):
         while await asyncio.to_thread(active):
             try:await record(collector.provider,store,'live' if family=='live-extra' else family,scope,active,stream_id=family)
