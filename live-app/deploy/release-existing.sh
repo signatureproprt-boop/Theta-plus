@@ -104,7 +104,7 @@ for name in ('dhan-desk.css','instruments.js','app.js','collection.js','dashboar
 with urlopen(url+'/',timeout=30) as response:html=response.read().decode()
 if 'page-instruments' not in html or 'instruments.js?v=1' not in html:
     raise RuntimeError('All-instrument directory missing from serving HTML')
-if 'dashboard.js?v=3.8.1' not in html or 'dashboard.css?v=3.8.5' not in html or 'dhan-desk.css?v=1' not in html:
+if 'dashboard.js?v=3.8.1' not in html or 'dashboard.css?v=3.8.5' not in html or 'dhan-desk.css?v=2' not in html:
     raise RuntimeError('Dashboard assets not referenced by serving HTML')
 print('Dashboard HTML and exact source assets verified.')
 PYDASHBOARD
