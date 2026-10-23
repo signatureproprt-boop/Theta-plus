@@ -114,7 +114,8 @@ def report(store,clock=None,symbol=None):
         record=documents['system/recorder/'+family];scope=scopes.get(family,[])
         receipt_age=age(record.get('last_durable_received_at'),clock);heartbeat_age=age(record.get('heartbeat'),clock)
         valid=bool(scope) and record.get('state')=='RECORDING' and receipt_age is not None and 0<=receipt_age<=30 and heartbeat_age is not None and 0<=heartbeat_age<=90
-        valid=valid and record.get('subscription_revision')==plan.get('revision') and record.get('subscribed')==len(scope) and record.get('missing_since_connection')==0 and record.get('decode_errors')==0
+        revisions=plan.get('feed_revisions');revisions=revisions if isinstance(revisions,dict) else {}
+        valid=valid and record.get('subscription_revision')==revisions.get(family,plan.get('revision')) and record.get('subscribed')==len(scope) and record.get('missing_since_connection')==0 and record.get('decode_errors')==0
         checks.append(check(family+' durable feed','PASS' if valid and worker_ok else 'BLOCKED' if is_open else 'CLOSED',
                             'Receipt and decoded subscription coverage only; lossless ticks / depth or per-instrument exchange freshness are not certified.',
                             receipt_age_seconds=receipt_age,subscribed=len(scope),missing=record.get('missing_since_connection'),decode_errors=record.get('decode_errors')))
