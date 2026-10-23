@@ -191,3 +191,30 @@ def test_prepare_subscribes_displayed_window_and_pinned_exact_contract(tmp_path,
     assert not any(r['security_id']=='999' for r in asyncio.run(live.prepare(board,None,s,'nifty','999')))
     options['999'].update(underlying='nifty',expiry='2026-10-15')
     assert not any(r['security_id']=='999' for r in asyncio.run(live.prepare(board,None,s,'nifty','999')))
+
+@pytest.mark.parametrize('count',[3,300])
+def test_repeated_same_instrument_observations_reach_browser_in_order(tmp_path,monkeypatch,count):
+    s=Store(tmp_path/'ordered.db')
+    class Socket:
+        def __init__(self):self.frames=[b''.join(ticker(price=100+i) for i in range(count)),struct.pack('<BHBIH',50,10,0,13,805)]
+        async def __aenter__(self):return self
+        async def __aexit__(self,*args):pass
+        async def recv(self):return self.frames.pop(0)
+    class Codec:
+        async def subscribe_instruments(self):pass
+        def process_data(self,packet):return codec().process_data(packet)
+    class Credentials:
+        client_id='fixture'
+        def token(self):return 'fixture'
+    class Provider:credentials=Credentials()
+    class Request:
+        async def is_disconnected(self):return False
+    async def prepare(*args):return list(instruments().values())
+    monkeypatch.setattr(live,'prepare',prepare);monkeypatch.setattr(live,'make_codec',lambda *args:Codec())
+    monkeypatch.setattr(live.websockets,'connect',lambda *args,**kwargs:Socket());monkeypatch.setattr(live,'now',at)
+    async def run():return [json.loads(v.removeprefix('data: ')) async for v in live.stream(Provider(),s,None,'nifty',Request())]
+    values=asyncio.run(run());batches=[v for v in values if v.get('type')=='batch'];ticks=[t for b in batches for t in b['ticks']]
+    assert [t['ltp'] for t in ticks]==list(range(100,100+count))
+    assert [t['stream_sequence'] for t in ticks]==list(range(1,count+1))
+    assert all(len(b['ticks'])<=128 for b in batches)
+    assert len({b['stream_id'] for b in batches})==1

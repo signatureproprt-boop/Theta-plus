@@ -7,6 +7,7 @@
   function text(message){state=message;if(node('research-live-state'))node('research-live-state').textContent=message;}
   function currentTrade(r){const at=Date.parse(r.trade_at);const age=Date.now()-at;const receiptAge=Date.now()-Date.parse(r.received_at);return active&&connected&&Number.isFinite(at)&&age>=0&&age<=10000&&receiptAge>=0&&receiptAge<=10000&&r.trade_state==='RECENT_TRADE';}
   let paintTimer=null,pendingTicks=new Map(),pendingUnderlying=null;
+  let streamId=null,lastSequence=0,observations=0,transportGaps=0;
   // Keep every observation in the stream state, but paint at most ten times a second.
   // Coalesce by exact identity so a busy contract cannot hide another contract's update.
   function cancelPaint(){if(paintTimer!==null)clearTimeout(paintTimer);paintTimer=null;}
@@ -50,14 +51,21 @@
       text(data.state==='RENEW_CONNECTION'?'Renewing connection…':data.state);return;
     }
     if(data.type!=='batch')return;
+    if(data.stream_id&&data.stream_id!==streamId){streamId=data.stream_id;lastSequence=0;observations=0;transportGaps=0;}
     for(const row of data.ticks||[]){const identity=row.segment+':'+row.security_id;rows.set(identity,row);pendingTicks.set(identity,row);
+      observations++;
+      if(Number.isInteger(row.stream_sequence)){
+        if(row.stream_sequence>lastSequence+1)transportGaps+=row.stream_sequence-lastSequence-1;
+        else if(row.stream_sequence<=lastSequence)transportGaps++;
+        lastSequence=row.stream_sequence;
+      }
       if(row.role==='underlying'&&row.key===symbol&&currentTrade(row)){
         const at=Date.parse(row.trade_at),old=points.at(-1);
         if(!old||at>old.at)points.push({at,price:row.ltp});else if(at===old.at)old.price=row.ltp;
         points=points.slice(-300);pendingUnderlying=row;
       }
     }
-    if((data.ticks||[]).length){retries=0;text('Connected · received '+new Date(data.received_at).toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata'})+' IST');}
+    if((data.ticks||[]).length){retries=0;text('Connected · '+observations+' provider updates · transport gaps '+transportGaps+' · display ≤10Hz · received '+new Date(data.received_at).toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata'})+' IST');}
     else if(!rows.size)text('Connected · awaiting market ticks');
     schedulePaint();
   }

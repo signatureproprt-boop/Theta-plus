@@ -104,3 +104,15 @@ test('burst paints are bounded and preserve latest observations for each identit
   assert.equal(e.node('research-live-stop').disabled,true);
   assert.match(e.node('research-live-state').textContent,/not live/);
 });
+
+test('all transport observations are counted while painting coalesces; gaps are visible',async()=>{
+  const at=new Date().toISOString(),e=environment([]);let step=0;
+  const tick=i=>({key:'nifty',segment:'IDX_I',security_id:'13',role:'underlying',label:'NIFTY',ltp:25000+i,trade_at:at,received_at:at,trade_state:'RECENT_TRADE',stream_sequence:i});
+  const wire=new TextEncoder().encode([{type:'status',state:'CONNECTED_AWAITING_TICKS'},{type:'batch',stream_id:'s1',received_at:at,ticks:[tick(1),tick(2),tick(4)]}].map(x=>'data: '+JSON.stringify(x)+'\n\n').join(''));
+  e.context.window.thetaLiveStreamRequest=async()=>({ok:true,body:{getReader:()=>({read:()=>step++===0?Promise.resolve({done:false,value:wire}):new Promise(()=>{}),cancel:async()=>{}})}});
+  e.node('research-live-start').onclick();await e.flush();
+  const paint=e.timeouts.find(t=>t.ms===100&&!t.cancelled);paint.fn();
+  assert.match(e.node('research-live-state').textContent,/3 provider updates · transport gaps 1/);
+  assert.match(e.node('research-live-state').textContent,/display ≤10Hz/);
+  e.context.window.thetaLiveStop();
+});

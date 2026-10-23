@@ -135,19 +135,30 @@ async def stream(provider,store,board,symbol,request,contract_id=''):
             codec.ws=socket;await codec.subscribe_instruments()
             yield event({'type':'status','state':'CONNECTED_AWAITING_TICKS','instruments':instruments,'received_at':now().isoformat(),
                          'scope':'While this page is connected; automatic 240s renewal. Not an unattended recorder.'})
-            next_emit=0.;pending={};last_tick=None
+            next_emit=0.;pending=[];last_tick=None;sequence=0;stream_id=uuid.uuid4().hex
+            def batch():
+                return {'type':'batch','ticks':list(pending),'received_at':now().isoformat(),
+                        'last_tick_received_at':last_tick,'stream_id':stream_id,
+                        'last_sequence':sequence,'transport':'Ordered decoded provider price observations; UI painting may coalesce. Upstream tick loss is not certified.'}
             while time.monotonic()<deadline:
                 if await request.is_disconnected():return
                 try:
                     frame=await asyncio.wait_for(socket.recv(),timeout=1)
                     for packet in split_packets(frame):
                         row=observation(codec,packet,lookup,now())
-                        if row and row['type']=='status':yield event(row);return
-                        if row:pending[(row['segment'],row['security_id'])]=row;last_tick=now().isoformat()
+                        if row and row['type']=='status':
+                            if pending:yield event(batch());pending.clear()
+                            yield event(row);return
+                        if row:
+                            sequence+=1;pending.append({**row,'stream_sequence':sequence});last_tick=now().isoformat()
+                            # Keep every decoded observation in order, bounded
+                            # below the browser's per-event size limit.
+                            if len(pending)>=128:yield event(batch());pending.clear()
                 except asyncio.TimeoutError:pass
                 if time.monotonic()>=next_emit:
-                    yield event({'type':'batch','ticks':list(pending.values()),'received_at':now().isoformat(),'last_tick_received_at':last_tick})
-                    pending.clear();next_emit=time.monotonic()+1
+                    yield event(batch())
+                    pending.clear();next_emit=time.monotonic()+.1
+            if pending:yield event(batch())
             yield event({'type':'status','state':'RENEW_CONNECTION','received_at':now().isoformat()})
     except asyncio.CancelledError:raise
     except HTTPException as exc:
