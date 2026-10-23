@@ -254,3 +254,16 @@ def test_reused_derivative_security_id_does_not_show_another_expiry_history(dire
     seed(directory.collector,[{**previous,'expiry':'2100-01-01'}],'c'*64)
     result=directory.saved_history('future','c'*64,date(2026,10,21),date(2026,10,23))
     assert result['rows']==0 and result['invalid_excluded']==1
+
+
+def test_home_matches_trading_symbols_with_legal_names_and_next50_alias(directory):
+    seed(directory.collector,[item(),item('next',symbol='NIFTYNXT50',security_id='38'),
+        item('reliance',symbol='RELIANCE INDUSTRIES LTD',underlying='RELIANCE',segment='NSE_EQ',instrument='EQUITY',security_id='2885'),
+        item('maruti',symbol='MARUTI SUZUKI INDIA LTD',underlying='MARUTI',segment='NSE_EQ',instrument='EQUITY',security_id='10999')],'c'*64)
+    result=directory.overview()
+    assert [i['key'] for i in result['watchlist']]==['maruti','reliance']
+    assert [i['key'] for i in result['indices']]==['index','next']
+
+def test_home_fallback_prefers_cash_stocks(directory):
+    seed(directory.collector,[item(),item('cash',symbol='OTHER COMPANY',segment='NSE_EQ',instrument='EQUITY')],'d'*64)
+    assert directory.overview()['watchlist'][0]['key']=='cash'

@@ -176,14 +176,17 @@ class InstrumentDirectory:
                 by_key={json.loads(r[0])['key']:json.loads(r[0]) for r in rows};items=[by_key[k] for k in wanted if k in by_key]
             else:
                 popular=['ADANIPORTS','BAJFINANCE','MARUTI','M&M','ULTRACEMCO','SUNPHARMA','POWERGRID','TITAN','RELIANCE','INFY','HDFCBANK','ITC']
-                rows=db.execute("SELECT document FROM instruments WHERE segment='NSE_EQ' AND kind='EQUITY' AND symbol IN ("+','.join('?' for _ in popular)+') ORDER BY position',popular).fetchall()
+                rows=db.execute("SELECT document FROM instruments WHERE segment='NSE_EQ' AND kind='EQUITY' AND (symbol IN ("+','.join('?' for _ in popular)+") OR json_extract(document,'$.underlying') IN ("+','.join('?' for _ in popular)+')) ORDER BY position',popular+popular).fetchall()
                 by_symbol={}
                 for row in rows:
                     item=json.loads(row[0])
-                    if not item.get('reason'):by_symbol.setdefault(item['symbol'],item)
+                    if not item.get('reason'):
+                        name=item['symbol'] if item['symbol'] in popular else item.get('underlying')
+                        if name in popular:by_symbol.setdefault(name,item)
                 items=[by_symbol[s] for s in popular if s in by_symbol]
+                if not items:items=[json.loads(r[0]) for r in db.execute("SELECT document FROM instruments WHERE segment='NSE_EQ' AND kind='EQUITY' ORDER BY rank,symbol LIMIT 12")]
                 if not items:items=[json.loads(r[0]) for r in db.execute("SELECT document FROM instruments WHERE segment='IDX_I' ORDER BY rank,symbol LIMIT 12")]
-            index_names=['NIFTY','NIFTYNEXT50','BANKNIFTY','INDIAVIX','FINNIFTY']
+            index_names=['NIFTY','NIFTYNXT50','NIFTYNEXT50','BANKNIFTY','INDIAVIX','FINNIFTY']
             indices=[json.loads(r[0]) for r in db.execute("SELECT document FROM instruments WHERE segment='IDX_I' AND kind='INDEX' AND replace(replace(symbol,' ',''),'_','') IN ("+','.join('?' for _ in index_names)+')',index_names)]
             indices.sort(key=lambda i:index_names.index(re.sub('[ _]','',i['symbol'])))
         quotes=self.saved_quotes(items+indices)
