@@ -139,8 +139,11 @@ class Collector:
     def page_items(self,key):
         return self.store.document(key)[0]['items']
 
-    def acquire(self):
+    def acquire(self,diagnostic_owner=None):
         owner=uuid.uuid4().hex;ts=time.time()
+        priority=self.store.document('control/diagnostic-slot')[0] or {}
+        if priority.get('until',0)>ts and priority.get('owner')!=diagnostic_owner:
+            raise HTTPException(409,'A historical diagnosis is waiting for the collector')
         def claim(old):
             if old and old.get('until',0)>ts:raise HTTPException(409,'Another collector request is running')
             return {'owner':owner,'until':ts+600,'next_at':(old or {}).get('next_at',0),

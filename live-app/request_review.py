@@ -1,10 +1,46 @@
 """Bounded read-only diagnosis. Never advances a collector checkpoint."""
 import asyncio
+import anyio
+import time
+import uuid
 from datetime import date,datetime,timedelta,timezone
 from fastapi import HTTPException
 from dhan_data import candle_count
 from provider import ProviderError
 from runtime import IST
+
+async def acquire_diagnostic(collector,wait_seconds=45):
+    """Reserve the next free collector turn without stealing its active lease.
+
+    The reservation expires after a crash. Streaming recorders retain their own
+    connections; only new collection calls yield while the diagnostic waits.
+    """
+    from collection import replace
+    token=uuid.uuid4().hex
+    def reserve(old):
+        if old and old.get('until',0)>time.time():
+            raise HTTPException(409,'Another historical diagnosis is pending')
+        return {'owner':token,'until':time.time()+wait_seconds+15}
+    with anyio.CancelScope(shield=True):
+        await asyncio.to_thread(replace,collector.store,'control/diagnostic-slot',reserve)
+    try:
+        deadline=time.monotonic()+wait_seconds
+        while True:
+            try:
+                with anyio.CancelScope(shield=True):
+                    owner=await asyncio.to_thread(collector.acquire,diagnostic_owner=token)
+                return owner
+            except HTTPException as error:
+                if error.status_code!=409:raise
+                remaining=deadline-time.monotonic()
+                if remaining<=0:
+                    raise HTTPException(409,'Collector remains busy; diagnostic did not run. Existing recording and checkpoints are retained.') from None
+                await asyncio.sleep(min(1,remaining))
+    finally:
+        def clear(old):
+            return {**old,'until':0} if old and old.get('owner')==token else old
+        with anyio.CancelScope(shield=True):
+            await asyncio.to_thread(replace,collector.store,'control/diagnostic-slot',clear)
 
 async def diagnose(collector,jid,result_key=None):
     job=collector.get_job(jid);task=job.get('current')
@@ -16,9 +52,11 @@ async def diagnose(collector,jid,result_key=None):
         task=entry.get('task')
     if not task or (not result_key and job['state'] not in ('request_review','permission_blocked','token_required')):
         raise HTTPException(409,'No blocked current request to diagnose')
-    owner=await asyncio.to_thread(collector.acquire)
+    owner=await acquire_diagnostic(collector)
     try:return await _diagnose(collector,jid,job,task,owner,result_key)
-    finally:await asyncio.to_thread(collector.release,owner)
+    finally:
+        with anyio.CancelScope(shield=True):
+            await asyncio.to_thread(collector.release,owner)
 
 async def _diagnose(collector,jid,job,task,owner,result_key):
     item=task['item'];cat=collector.catalogue();matches=[]
