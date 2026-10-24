@@ -89,7 +89,8 @@ def pause_failed_job(store,jid,error):
     return record
 
 
-async def run_worker(collector,max_seconds=23*3600):
+async def run_worker(collector,max_seconds=23*3600,clock=None):
+    clock=clock or time.monotonic
     store=collector.store;owner=uuid.uuid4().hex;claimed=False
     execution=os.environ.get('CLOUD_RUN_EXECUTION')
     def claim(old):
@@ -104,7 +105,7 @@ async def run_worker(collector,max_seconds=23*3600):
                              'build_id':runtime_build(),'state':'running'}
     await asyncio.to_thread(replace,store,'control/worker',claim)
     if not claimed:return
-    started=time.monotonic()
+    started=clock()
     def heartbeat(state='running'):
         def touch(old):
             if not old or old.get('owner')!=owner:raise WorkerLeaseLost('Worker lease lost')
@@ -135,27 +136,33 @@ async def run_worker(collector,max_seconds=23*3600):
             try:await asyncio.wait_for(stop.wait(),2)
             except asyncio.TimeoutError:pass
     lease_task=asyncio.create_task(keep_lease());engine_task=asyncio.create_task(data_engine());doctor_task=asyncio.create_task(doctor_engine())
-    next_scan=0;last_stage='worker_start'
+    next_scan=0;next_job_scan=0;jobs=[];last_stage='worker_start'
     try:
-        while time.monotonic()-started<max_seconds:
+        while clock()-started<max_seconds:
             if lease_task.done():lease_task.result()
             from gap_recovery import tick
             last_stage='worker_heartbeat'
             await asyncio.to_thread(heartbeat)
             recovery_pending=False
-            if time.monotonic()>=next_scan:
+            if clock()>=next_scan:
                 try:
                     last_stage='gap_recovery'
                     recovery_pending=await asyncio.to_thread(tick,collector)
+                    next_scan=clock()+30
                 except Exception as error:
                     await asyncio.to_thread(capture,store,'gap_recovery',error)
-                    next_scan=time.monotonic()+60
-            try:
-                last_stage='job_listing'
-                jobs=await asyncio.to_thread(lambda:list(running_jobs(store)))
-            except Exception as error:
-                await asyncio.to_thread(capture,store,'job_listing',error)
-                await asyncio.sleep(5);continue
+                    next_scan=clock()+60
+            # Active IDs are a scheduling hint only. Collector.run reads fresh
+            # state/leases before every request, so external pauses still win.
+            # Avoid reloading thousands of completed GCS jobs on every turn.
+            if clock()>=next_job_scan or recovery_pending:
+                try:
+                    last_stage='job_listing'
+                    jobs=await asyncio.to_thread(lambda:list(running_jobs(store)))
+                    next_job_scan=clock()+60
+                except Exception as error:
+                    await asyncio.to_thread(capture,store,'job_listing',error)
+                    await asyncio.sleep(5);continue
             if not jobs:
                 if recovery_pending:continue
                 from data_system import enabled
@@ -163,18 +170,21 @@ async def run_worker(collector,max_seconds=23*3600):
                 if await asyncio.to_thread(lambda:enabled(store) or pending(store)):
                     await asyncio.sleep(5);continue
                 break
+            finished=set()
             for jid in jobs:
-                if time.monotonic()-started>=max_seconds:break
+                if clock()-started>=max_seconds:break
                 await asyncio.to_thread(heartbeat)
                 try:
                     last_stage='collection_job'
                     result=await collector.run(jid)
                     print('collection',jid,result['state'],result['items_assessed'],flush=True)
+                    if result['state']!='running':finished.add(jid)
                 except HTTPException as error:
                     if error.status_code not in (409,429):
                         await asyncio.to_thread(pause_failed_job,store,jid,error)
                 except Exception as error:
                     await asyncio.to_thread(pause_failed_job,store,jid,error)
+            jobs=[jid for jid in jobs if jid not in finished]
             await asyncio.sleep(1)
         else:state='checkpointed'
     except Exception as error:

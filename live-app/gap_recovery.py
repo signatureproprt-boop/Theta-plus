@@ -6,7 +6,7 @@ from collection import digest, now, replace
 from runtime import IST
 
 CONTROL='control/gap-recovery'
-SCAN_POLICY='bounded-daily-probe-v2'
+SCAN_POLICY='bounded-session-probe-v3'
 
 def daily_probe_ranges(task):
     """One recent probe; at most 127 earlier windows, without date holes."""
@@ -20,6 +20,49 @@ def daily_probe_ranges(task):
         stop=min(probe,start+timedelta(days=size))
         ranges.append([start.isoformat(),stop.isoformat()]);start=stop
     return ranges
+
+def rejection_probe_ranges(task):
+    """A changed request span, never an unchanged DH-907 retry loop.
+
+    Long daily requests retain the established recent-probe policy. Short NSE
+    requests probe verified regular sessions, newest first, within the original
+    range. Stop before older sessions if the first probe has no valid rows.
+    """
+    long=daily_probe_ranges(task)
+    if long:return long
+    if not valid_history_retry(task):return []
+    item=task['item']
+    if item.get('exchange')!='NSE' or item.get('segment') not in ('IDX_I','NSE_EQ','NSE_FNO'):return []
+    start=date.fromisoformat(task['from']);end=date.fromisoformat(task['to'])
+    if not 1<(end-start).days<=7:return []
+    from data_calendar import session
+    days=[start+timedelta(days=n) for n in range((end-start).days)]
+    if any(session(day)['state'] not in ('REGULAR','CLOSED') for day in days):return []
+    expiry=item.get('expiry')
+    try:expiry=date.fromisoformat(expiry) if expiry else None
+    except (ValueError,TypeError):return []
+    return [[day.isoformat(),(day+timedelta(days=1)).isoformat()] for day in reversed(days)
+            if session(day)['state']=='REGULAR' and (expiry is None or day<=expiry)]
+
+
+def recovery_progress(jobs):
+    """Unique source outcomes with returned rows; never a coverage percentage."""
+    groups={};excluded=0
+    for job in jobs:
+        if not job.get('retry_of'):continue
+        families=job.get('config',{}).get('families',[])
+        family=job.get('retry_family') or (families[0] if len(families)==1 else None)
+        if family not in ('daily','intraday','rolling'):
+            excluded+=1;continue
+        groups.setdefault(job['retry_of'],[]).append(job)
+    returned=sum(any(j.get('rows_saved',0)>0 for j in children) for children in groups.values())
+    pending=sum(any(j.get('state')=='running' for j in children) for children in groups.values())
+    issues=sum(any(any(j.get('counts',{}).get(k,0) for k in ('failed','empty','partial','unsupported','permission_blocked')) for j in children) for children in groups.values())
+    return {'checked_at':now(),'excluded_nonhistory_or_unclassified_retry_jobs':excluded,'source_results_assessed':len(groups),'source_results_with_returned_rows':returned,
+            'source_results_no_rows_yet':len(groups)-returned,'source_results_with_pending_jobs':pending,
+            'source_results_with_issue_outcomes':issues,'retry_jobs':sum(len(v) for v in groups.values()),
+            'coverage_verified':False,'scope':'Distinct original results with retry observations. Returned rows, queued jobs and completed attempts do not certify full date/instrument coverage.'}
+
 
 def valid_history_retry(task):
     """Admit one unchanged DH-905 retry only for a valid history wire shape.
@@ -79,7 +122,7 @@ def eligible(entry):
     if result.get('code')=='DH-907' and result.get('http_status')==400:
         # Change only the date span; never interpret this ambiguous rejection as
         # proof of an unsupported instrument or complete unavailable history.
-        return bool(daily_probe_ranges(entry['task']))
+        return bool(rejection_probe_ranges(entry['task']))
     # Entitlement, invalid wire shapes and ambiguous DH-907 no-data rejections
     # still need diagnosis, not an automatic retry loop.
     return result.get('http_status') in (500,502,503,504) or any('HTTP '+str(code) in reason for code in (500,502,503,504))
@@ -88,7 +131,7 @@ def tick(collector):
     store=collector.store;state=store.document(CONTROL)[0] or {}
     if not state.get('enabled'):return False
     if state.get('scan_policy')!=SCAN_POLICY:
-        # Revisit previously skipped DH-905 outcomes once under the new policy.
+        # Revisit rejected short ranges under the bounded changed-session policy.
         # Deterministic child IDs and retry_of checks prevent duplicate retries.
         def upgrade(old):
             if old.get('scan_policy')==SCAN_POLICY:return old
@@ -99,7 +142,8 @@ def tick(collector):
     active=sum(bool(j.get('history_slices')) and j['state'] in ('running','token_required','permission_blocked') for j in jobs)
     if active>=8:
         return False # Drain first; do not spin if all eight need credentials.
-    sources=sorted((j for j in jobs if not j.get('retry_of') and j['state'] in ('running','completed')),key=lambda j:j['id'])
+    sources=sorted((j for j in jobs if not j.get('retry_of') and not j.get('system_user_paused') and j['state'] in ('running','completed')),
+        key=lambda j:(0 if j.get('system_role') in ('all_daily','all_intraday','all_rolling') else 1,j['id']))
     if not sources:return False
     position=state.get('position',0)%len(sources);parent=sources[position];jid=parent['id']
     cursors=dict(state.get('cursors',{}));page=collector.results(jid,cursors.get(jid,''))
@@ -112,7 +156,7 @@ def tick(collector):
                 (task['item']['instrument']=='OPTIDX' and parent.get('rolling_identity_version')!=2)):
             continue
         previous=[j for j in jobs if j.get('retry_of')==entry['key']]
-        ranges=daily_probe_ranges(task) if entry['result'].get('code') in ('DH-905','DH-907') else []
+        ranges=rejection_probe_ranges(task) if entry['result'].get('code') in ('DH-905','DH-907') else []
         if ranges:
             if any(j.get('history_slices') for j in previous):continue
             if any(j.get('rows_saved') and not j.get('repair_scope') and
@@ -122,7 +166,8 @@ def tick(collector):
         if not ranges and previous and (not quarantine or any(j.get('rows_saved') or j['config'].get('quarantine_invalid_candles') for j in previous)):
             continue
         # Deterministic identity closes a crash between creation and checkpoint.
-        child_id=digest(['daily-probe-recovery-v1' if ranges else 'gap-recovery-v1',entry['key']])[:32]
+        strategy=('daily-probe-recovery-v1' if daily_probe_ranges(task) else 'session-probe-recovery-v1') if ranges else 'gap-recovery-v1'
+        child_id=digest([strategy,entry['key']])[:32]
         child=collector.retry(jid,entry['key'],quarantine_invalid=quarantine,child_id=child_id,history_ranges=ranges or None)
         if child['state']=='paused':collector.control(child_id,'resume')
         if ranges:active+=1
@@ -133,7 +178,7 @@ def tick(collector):
     else:cursors.pop(jid,None)
     next_position=(position+1)%len(sources)
     finished_round=next_position==0 and not cursors
-    new={**state,'position':next_position,'cursors':cursors,'last_scan_at':now(),'last_source':jid,
+    new={**state,'progress':recovery_progress(jobs),'position':next_position,'cursors':cursors,'last_scan_at':now(),'last_source':jid,
          'inspected_total':state.get('inspected_total',0)+processed,
          'queued_total':state.get('queued_total',0)+queued,
          'next_scan_at':time.time()+900 if finished_round else 0,

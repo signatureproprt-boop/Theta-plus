@@ -467,6 +467,7 @@ def status(store,clock=None):
             'live_capacity':plan.get('live_capacity',10000),'interactive_connection_reserved':plan.get('interactive_connection_reserved',True),'all_market_continuous':False,
             'depth20_unsubscribed':plan.get('depth20_unsubscribed'),'depth20_scope':plan.get('depth20_scope'),
             'session_recovery':store.document('system/session-recovery')[0] or {},
+            'historical_recovery':(store.document('control/gap-recovery')[0] or {}).get('progress',{}),
             'segment_probe':public_report(store),
             'streams':streams,'maintenance':store.document('system/maintenance')[0] or {},
             'quote_sweep':store.document('system/quote-sweep')[0] or {},

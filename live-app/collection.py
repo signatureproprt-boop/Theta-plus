@@ -297,7 +297,7 @@ class Collector:
         if job.get('history_slices'):
             result['history_recovery']={'windows_total':len(job['history_slices']),
                 'windows_assessed':job['cursor']['window'],'probe_verified':job.get('slice_probe_verified',False),
-                'scope':'Recent daily probe, then earlier date windows only if the probe returns valid rows; original gaps retained.'}
+                'scope':'Recent dated probe, then remaining windows only if valid rows return; original gaps retained.'}
         if job.get('current'):
             t=job['current']
             result['current_item']={'family':t['family'],'symbol':t['item']['symbol'],'segment':t['item']['segment'],'from':t['from'],'to':t['to']}
@@ -767,9 +767,9 @@ class Collector:
                 position=job['cursor']['window']
                 if position>=len(job['history_slices']) or (position and not job.get('slice_probe_verified')):
                     job.update(state='completed',updated_at=now(),message=(
-                        'Bounded daily probe did not return valid rows. Original history remains unresolved; no unavailable-data claim was inferred.'
+                        'Bounded history probe did not return valid rows. Original history remains unresolved; no unavailable-data claim was inferred.'
                         if not job.get('slice_probe_verified') else
-                        'Daily date-window recovery finished. Review each window outcome; original failed range remains retained.'))
+                        'History date-window recovery finished. Review each window outcome; original failed range remains retained.'))
                     await asyncio.to_thread(self.save_job,job)
                     return self.summary(job)
                 start,end=job['history_slices'][position]
@@ -935,11 +935,11 @@ class Collector:
             raise HTTPException(422,'Invalid legacy rolling expiry code. Create a new Expired options plan; the original failure remains retained.')
         parent=self.get_job(jid)
         if history_ranges is not None:
-            from gap_recovery import daily_probe_ranges
-            expected=daily_probe_ranges(entry['task'])
+            from gap_recovery import rejection_probe_ranges
+            expected=rejection_probe_ranges(entry['task'])
             if (not expected or history_ranges!=expected or entry['result'].get('status')!='failed'
                     or entry['result'].get('code') not in ('DH-905','DH-907') or entry['result'].get('http_status')!=400):
-                raise HTTPException(422,'Choose a validated long daily-history rejection for bounded recovery')
+                raise HTTPException(422,'Choose a validated rejected history range for bounded recovery')
         if entry['task']['family']=='rolling' and entry['task']['item']['instrument']=='OPTIDX' and parent.get('rolling_identity_version')!=2:
             raise HTTPException(422,'Legacy rolling index identity requires a new Expired options plan; original results retained.')
         if session_day is not None:
@@ -952,7 +952,7 @@ class Collector:
         child={**parent,'id':child_id or uuid.uuid4().hex,'pages':[],'cursor':{'page':0,'item':0,'variant':0,'window':0},
             'created_at':now(),'updated_at':now(),'state':'paused','current':entry['task'],
             'counts':{s:0 for s in TERMINAL},'items_assessed':0,'rows_saved':0,'retries':0,
-            'provider_calls':0,'message':'Retry ready. Resume to retry this result.','retry_of':key,'force_fetch':True}
+            'provider_calls':0,'message':'Retry ready. Resume to retry this result.','retry_of':key,'retry_family':entry['task']['family'],'force_fetch':True}
         child.pop('retry_at',None)
         for inherited in ('chain_parent','chain_pending','request_error','system_error','budget_wait_day','history_slices','history_slice_task','slice_probe_verified'):
             child.pop(inherited,None)
@@ -960,10 +960,10 @@ class Collector:
         if history_ranges:
             task=entry['task']
             child.update(current=None,history_slices=history_ranges,history_slice_task=task,slice_probe_verified=False)
-            child['config'].update(start=task['from'],end=task['to'],families=['daily'],
+            child['config'].update(start=task['from'],end=task['to'],families=[task['family']],
                 symbols=[task['item']['symbol']],segments=[task['item']['segment']],
                 continue_rejected_requests=True,quarantine_invalid_candles=True)
-            child['message']='Bounded daily probe ready; earlier windows run only after valid source rows are observed.'
+            child['message']='Bounded history probe ready; remaining windows run only after valid source rows are observed.'
         if session_day is not None:
             stop=(date.fromisoformat(session_day)+timedelta(days=1)).isoformat()
             child['current']={**entry['task'],'from':session_day,'to':stop}
