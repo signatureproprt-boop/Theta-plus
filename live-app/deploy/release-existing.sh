@@ -70,7 +70,8 @@ curl --fail --silent --show-error --max-time 30 "$url/" > "$work/index.html"
 python3 - "$work/index.html" <<'PY'
 import sys
 s=open(sys.argv[1]).read()
-assert 'page-home' in s and 'page-admin' in s and 'page-collect' in s and 'Collect all data' in s,'Foundation UI missing'
+assert 'page-home' in s and 'page-admin' in s and 'page-collect' in s and 'data-page="collect">Data collection' in s,'Workspace navigation missing'
+assert 'desk-market-watch' in s and 'desk-index-bar' in s,'Shared market frame missing'
 assert 'page-room' not in s and 'Strategy lab' not in s,'Retired UI still present'
 assert all('page-'+p in s for p in ('research','options','quality','risk','replay','paper')),'Research workspace missing'
 PY
