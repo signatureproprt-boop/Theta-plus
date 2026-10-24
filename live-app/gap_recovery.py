@@ -127,6 +127,24 @@ def eligible(entry):
     # still need diagnosis, not an automatic retry loop.
     return result.get('http_status') in (500,502,503,504) or any('HTTP '+str(code) in reason for code in (500,502,503,504))
 
+def select_recovery_source(sources,state):
+    """Give active recent-history roots three turns per general-history turn.
+
+    Separate durable positions keep both queues moving. Quote/feed-only roots
+    cannot delay historical recovery; original result cursors remain untouched.
+    """
+    priority_roles={'all_daily','all_intraday','all_daily_earlier'}
+    priority=[j for j in sources if j.get('system_role') in priority_roles]
+    priority_ids={j['id'] for j in priority}
+    general=[j for j in sources if j['id'] not in priority_ids]
+    turn=state.get('history_scan_turn',0)
+    use_priority=bool(priority) and (not general or turn%4!=3)
+    pool=priority if use_priority else general
+    field='priority_position' if use_priority else 'position'
+    position=state.get(field,0)%len(pool)
+    return pool[position],{field:(position+1)%len(pool),'history_scan_turn':turn+1},bool(priority),position+1==len(pool)
+
+
 def tick(collector):
     store=collector.store;state=store.document(CONTROL)[0] or {}
     if not state.get('enabled'):return False
@@ -142,10 +160,11 @@ def tick(collector):
     active=sum(bool(j.get('history_slices')) and j['state'] in ('running','token_required','permission_blocked') for j in jobs)
     if active>=8:
         return False # Drain first; do not spin if all eight need credentials.
-    sources=sorted((j for j in jobs if not j.get('retry_of') and not j.get('system_user_paused') and j['state'] in ('running','completed')),
+    sources=sorted((j for j in jobs if not j.get('retry_of') and not j.get('system_user_paused') and j['state'] in ('running','completed')
+        and set(j.get('config',{}).get('families',[])) & {'daily','intraday','rolling'}),
         key=lambda j:(0 if j.get('system_role') in ('all_daily','all_intraday','all_rolling','all_daily_earlier') else 1,j['id']))
     if not sources:return False
-    position=state.get('position',0)%len(sources);parent=sources[position];jid=parent['id']
+    parent,positions,has_priority,wrapped=select_recovery_source(sources,state);jid=parent['id']
     cursors=dict(state.get('cursors',{}));page=collector.results(jid,cursors.get(jid,''))
     queued=0;processed=0;last=None
     for entry in page['items']:
@@ -176,12 +195,15 @@ def tick(collector):
     remaining=processed<len(page['items']) or bool(page.get('next_cursor'))
     if remaining and last:cursors[jid]=last
     else:cursors.pop(jid,None)
-    next_position=(position+1)%len(sources)
-    finished_round=next_position==0 and not cursors
-    new={**state,'progress':recovery_progress(jobs),'position':next_position,'cursors':cursors,'last_scan_at':now(),'last_source':jid,
+    finished_round=not has_priority and wrapped and not cursors
+    new={**state,'progress':{**recovery_progress(jobs),'scan_policy':'recent-history-three-to-one',
+            'history_sources':len(sources),'last_source_role':parent.get('system_role') or 'historical_plan'},
+         **positions,'cursors':cursors,'last_scan_at':now(),'last_source':jid,
          'inspected_total':state.get('inspected_total',0)+processed,
          'queued_total':state.get('queued_total',0)+queued,
          'next_scan_at':time.time()+900 if finished_round else 0,
          'status':'Scan finished; unresolved outcomes remain visible' if finished_round else 'Scanning saved outcomes'}
     replace(store,CONTROL,lambda _:new)
-    return not finished_round or bool(queued)
+    # Only newly created jobs require an immediate worker queue refresh.
+    # The worker calls the scanner again on its own bounded schedule.
+    return bool(queued)
