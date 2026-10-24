@@ -69,3 +69,12 @@ test('Home category and exchange shortcuts reach the matching full-catalogue que
  const e=environment();e.context.window.thetaInstrumentBrowse('options','NIFTY','NSE_FNO');await e.flush();
  assert.match(e.calls[0][1],/q=NIFTY/);assert.match(e.calls[0][1],/segment=NSE_FNO/);assert.match(e.calls[0][1],/category=options/);
 });
+
+
+test('changing the exchange immediately filters while retaining the current query',async()=>{
+ const e=environment();e.get('query').value='RELIANCE';e.get('segment').value='NSE_EQ';
+ e.get('segment').events.change();await e.flush();
+ assert.match(e.calls[0][1],/q=RELIANCE/);assert.match(e.calls[0][1],/segment=NSE_EQ/);
+ e.get('active').checked=false;e.get('active').events.change();await e.flush();
+ assert.match(e.calls[1][1],/segment=NSE_EQ/);assert.match(e.calls[1][1],/active_only=false/);
+});

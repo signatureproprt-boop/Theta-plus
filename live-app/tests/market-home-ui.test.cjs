@@ -3,12 +3,12 @@ const assert=require('node:assert/strict');
 const vm=require('node:vm');
 const fs=require('node:fs');
 const path=require('node:path');
-function environment({fail=false}={}){
+function environment({fail=false,initialHash='#home'}={}){
  const nodes=new Map(),events={},timers=[],calls=[],browsed=[],opened=[],storage=new Map();
  function node(id){if(!nodes.has(id))nodes.set(id,{innerHTML:'',textContent:'',events:{},querySelector(){return null;},addEventListener(name,fn){this.events[name]=fn;}});return nodes.get(id);}
  const data={catalogue_sha256:'a'.repeat(64),catalogue_rows:215256,catalogue_at:'2026-10-24T00:00:00Z',counts:{all:180000,cash:9000,indices:100,options:150000,futures:2000,currency:8000,commodities:10000},unresolved:22026,
  watchlist:[{key:'exact',symbol:'RELIANCE',display:'Reliance <img src=x onerror=alert(1)>',segment:'NSE_EQ',security_id:'2885',saved_quote:{price:200,volume:12,received_at:'2026-10-24T00:00:00Z'}},{key:'waiting',symbol:'UNKNOWN',segment:'BSE_EQ',security_id:'999',saved_quote:null}],scope:'Retained observations only'};
- const context={document:{getElementById:node,hidden:false},location:{hash:'#home'},URLSearchParams,Intl,Date,AbortSignal,console,
+ const context={document:{getElementById:node,hidden:false},location:{hash:initialHash},URLSearchParams,Intl,Date,AbortSignal,console,
  setInterval(fn,ms){timers.push({fn,ms});},setTimeout:fn=>setImmediate(fn),window:{addEventListener(name,fn){events[name]=fn;},localStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v)},
  thetaApiFetch:async(url,options)=>{calls.push({url,options});if(fail)throw Error('Store unavailable');return {payload:data};},thetaReadResponse:async r=>r.payload,
  thetaInstrumentBrowse(...args){browsed.push(args);},thetaInstrumentOpen(...args){opened.push(args);}}};
@@ -47,4 +47,14 @@ test('Home refresh reads stored prices only and suspends polling when hidden',as
 test('failed overview reads show unknown counts and a retry message rather than fake prices',async()=>{
  const e=environment({fail:true});await e.flush();const html=e.node('page-home').innerHTML;
  assert.match(html,/Store unavailable/);assert.match(html,/Watchlist unavailable/);assert.doesNotMatch(html,/2,15,256|200/);
+});
+
+
+test('shared watchlist loads and refreshes on research routes using saved reads only',async()=>{
+ const e=environment({initialHash:'#research'});await e.flush();
+ assert.equal(e.calls.length,1);assert.match(e.node('page-home').innerHTML,/Reliance &lt;img/);
+ e.node('desk-market-watch').events.click({target:{closest:()=>({dataset:{homeInstrument:'exact'},hasAttribute:()=>false})}});
+ assert.equal(e.opened[0][0].security_id,'2885');
+ e.timers[0].fn();await e.flush();assert.equal(e.calls.length,2);
+ assert.ok(e.calls.every(c=>!c.options.method));
 });
