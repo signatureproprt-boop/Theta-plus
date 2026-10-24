@@ -96,3 +96,45 @@ def test_old_worker_identity_cannot_certify_a_new_execution(monkeypatch):
     monkeypatch.setattr(m.time,'sleep',lambda _:None)
     with pytest.raises(RuntimeError,match='timed out'):m.verify(CLOCK)
     assert reports==[]
+
+
+def test_append_only_receipt_updates_display_without_overwriting_control(tmp_path):
+    from watchdog_evidence import load,RESOURCE,verified
+    from store import Store
+    s=Store(tmp_path/'db')
+    s.put_document('control/data-watchdog',{'reported_configured':True,'verified':False},0)
+    report={'verified':True,'basis':'natural-scheduler-restart-v1','worker':RESOURCE,'restart_observed':True,
+       'checkpoint_verified':True,'checkpoints_checked':5,'checked_at':CLOCK.isoformat()}
+    s.add('watchdog_acceptance',report)
+    loaded=load(s,CLOCK)
+    assert verified(loaded,CLOCK) and loaded['evidence_storage']=='append-only acceptance receipt'
+    assert s.document('control/data-watchdog')[0]['verified'] is False
+    assert not verified(load(s,datetime(2026,11,2,tzinfo=timezone.utc)),datetime(2026,11,2,tzinfo=timezone.utc))
+
+
+def test_invalid_or_unreadable_receipts_do_not_create_positive_evidence(tmp_path,monkeypatch):
+    from watchdog_evidence import load
+    from store import Store
+    s=Store(tmp_path/'db');s.put_document('control/data-watchdog',{'verified':False},0)
+    s.add('watchdog_acceptance',{'verified':True,'basis':'manual-fallback'})
+    assert load(s,CLOCK)=={'verified':False}
+    def fail(*args):raise OSError('Temporary read failure')
+    monkeypatch.setattr(s,'rows',fail)
+    assert load(s,CLOCK)=={'verified':False}
+
+
+def test_receipt_upload_is_create_only_and_verified_by_readback(monkeypatch):
+    class Result:pass
+    calls=[];record={}
+    def cloud(*args):return json.dumps({'spec':{'template':{'spec':{'template':{'spec':{'containers':[{'env':[{'name':'THETA_GCS_BUCKET','value':'test-data'}]}]}}}}}})
+    def run(args,**kwargs):
+        calls.append(args);record.update(json.loads(Path(args[3]).read_text()));return Result()
+    def output(args,**kwargs):
+        calls.append(args);return json.dumps(record)
+    monkeypatch.setattr(m,'gcloud',cloud);monkeypatch.setattr(m.subprocess,'run',run)
+    monkeypatch.setattr(m.subprocess,'check_output',output)
+    m.persist({'verified':True})
+    assert '--if-generation-match=0' in calls[0]
+    assert '/records/watchdog_acceptance/' in calls[0][4]
+    assert not any('/control/' in part for call in calls for part in call)
+    assert record['data']=={'verified':True} and 'cat' in calls[1]

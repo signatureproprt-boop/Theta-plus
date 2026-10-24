@@ -440,8 +440,8 @@ def status(store,clock=None):
     clock=clock or now();config=store.document(CONTROL)[0] or {};plan=store.document(SCOPE)[0] or {}
     worker=store.document('control/worker')[0] or {}
     doctor=store.document('doctor/current')[0] or {}
-    from watchdog_evidence import verified as watchdog_verified
-    watchdog=store.document('control/data-watchdog')[0] or {}
+    from watchdog_evidence import verified as watchdog_verified,load as load_watchdog
+    watchdog=load_watchdog(store,clock)
     watchdog={**watchdog,'restart_test_verified':watchdog_verified(watchdog,clock)}
     budget=store.document('control/provider-budget')[0] or {}
     # Public progress counters contain no Admin checks, raw records or findings

@@ -12,3 +12,17 @@ def verified(report,clock=None):
         at=datetime.fromisoformat(report['checked_at']);clock=clock or datetime.now(timezone.utc)
         return at.tzinfo is not None and timedelta(seconds=-5)<=clock-at<=timedelta(days=7)
     except (KeyError,TypeError,ValueError):return False
+
+
+def load(store,clock=None):
+    """Read the latest valid immutable acceptance receipt, keeping legacy data."""
+    legacy=store.document('control/data-watchdog')[0] or {}
+    try:
+        for row in store.rows('watchdog_acceptance',5):
+            report=row.get('data',{})
+            if verified(report,clock):
+                return {**legacy,**report,'evidence_record_id':row['id'],'evidence_storage':'append-only acceptance receipt'}
+    except Exception:
+        # An unreadable receipt cannot create a positive acceptance result.
+        pass
+    return legacy

@@ -5,6 +5,7 @@ Waits for natural Scheduler dispatch; manual fallback cannot pass acceptance.
 """
 import json
 import re
+import secrets
 import subprocess
 import sys
 import tempfile
@@ -76,12 +77,18 @@ def persist(report):
     containers=job['spec']['template']['spec']['template']['spec']['containers']
     bucket=next((e.get('value') for e in containers[0].get('env',[]) if e['name']=='THETA_GCS_BUCKET'),None)
     if not bucket or not re.fullmatch('[a-z0-9][a-z0-9_.-]{1,220}',bucket):raise ValueError('Configured durable bucket unavailable')
-    uri=f'gs://{bucket}/collection/control/data-watchdog.json'
-    version=subprocess.check_output(['gcloud','storage','objects','describe',uri,'--format=value(generation)'],text=True).strip()
-    if not version.isdigit():raise ValueError('Watchdog record generation unavailable')
+    # Append an immutable receipt. Overwriting the old control status requires
+    # storage.objects.delete; the verifier needs only create and read access.
+    record_id=int(time.time()*1000)*1000+secrets.randbelow(1000)
+    record={'id':record_id,'created_at':datetime.now(timezone.utc).isoformat(),'data':report}
+    key=f'{9007199254740991-record_id:016d}'
+    uri=f'gs://{bucket}/records/watchdog_acceptance/{key}.json'
     with tempfile.TemporaryDirectory() as directory:
-        path=Path(directory)/'evidence.json';path.write_text(json.dumps(report))
-        subprocess.run(['gcloud','storage','cp',str(path),uri,'--if-generation-match='+version,'--quiet'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+        path=Path(directory)/'evidence.json';path.write_text(json.dumps(record))
+        subprocess.run(['gcloud','storage','cp',str(path),uri,'--if-generation-match=0','--quiet'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+        saved=json.loads(subprocess.check_output(['gcloud','storage','cat',uri],text=True))
+        if saved!=record:raise ValueError('Acceptance receipt readback did not match')
+
 
 
 def verify(clock=None):
@@ -90,7 +97,7 @@ def verify(clock=None):
     if local.date()!=AUTHORIZED_DAY:
         print('WATCHDOG_TEST_SKIPPED: one-time authorized date only; existing evidence retained.');return
     data=read_status()
-    if data.get('watchdog',{}).get('verified') and data['watchdog'].get('basis')=='natural-scheduler-restart-v1':
+    if data.get('watchdog',{}).get('restart_test_verified') and data['watchdog'].get('basis')=='natural-scheduler-restart-v1':
         print('WATCHDOG_ALREADY_VERIFIED; no collector interruption.');return
     if data.get('calendar',{}).get('state')!='CLOSED' or not runtime_verified(data):
         raise ValueError('Closed market and healthy matching collector required; nothing stopped')

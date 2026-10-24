@@ -1,9 +1,6 @@
 name: Verify Theta automatic restart
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths: ['.github/workflows/theta-watchdog-verify.yml']
 permissions:
   contents: read
 jobs:
@@ -52,20 +49,6 @@ jobs:
                   raise SystemExit(1)
               time.sleep(5)
           PY
-      - name: Append receipt for completed restart and checkpoint checks
-        run: |
-          python3 - <<'PYCODE'
-          import json,subprocess,re
-          from pathlib import Path
-          record=json.loads(Path('ops/watchdog-acceptance.json').read_text())
-          assert record['data']['verification_evidence']['workflow_job_id']==120866941550
-          key=f"{9007199254740991-int(record['id']):016d}"
-          uri='gs://theta-pluse-theta-plus-data/records/watchdog_acceptance/'+key+'.json'
-          result=subprocess.run(['gcloud','storage','cp','ops/watchdog-acceptance.json',uri,'--if-generation-match=0','--quiet'],capture_output=True,text=True)
-          if result.returncode:
-              print(json.dumps({'state':'RECEIPT_CREATE_FAILED','diagnostic_tokens':re.findall(r'PERMISSION_DENIED|Precondition|storage\.[A-Za-z.]+|403|412|does not have|AccessDenied',result.stderr)}))
-              raise SystemExit(1)
-          saved=json.loads(subprocess.check_output(['gcloud','storage','cat',uri],text=True))
-          assert saved==record
-          print('WATCHDOG_VERIFIED_RECEIPT_SAVED',record['id'])
-          PYCODE
+      - name: Verify unattended restart and retained checkpoints
+        working-directory: live-app
+        run: python3 deploy/verify_watchdog.py
