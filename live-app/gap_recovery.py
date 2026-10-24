@@ -96,6 +96,9 @@ def valid_history_retry(task):
     except (KeyError,ValueError,TypeError):return False
 
 def all_jobs(store):
+    snapshots=getattr(store,'job_documents',None)
+    if callable(snapshots):
+        yield from snapshots();return
     cursor=''
     while True:
         names=store.document_names('jobs/',cursor,100)

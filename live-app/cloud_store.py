@@ -13,6 +13,8 @@ MAX_ID = 9007199254740991  # JavaScript's exact integer boundary
 class CloudStore:
     def __init__(self, bucket_name, client=None):
         self.bucket = (client or storage.Client()).bucket(bucket_name)
+        from job_inventory import JobInventory
+        self.job_inventory=JobInventory(self)
 
     @staticmethod
     def document_key(name):
@@ -47,6 +49,12 @@ class CloudStore:
         if after:args['start_offset']=root+after+'.json'
         return [b.name[len(root):-5] for b in self.bucket.list_blobs(**args)
                 if b.name.endswith('.json') and b.name[len(root):-5]>after][:limit]
+
+    def job_documents(self):
+        return self.job_inventory.documents()
+
+    def job_inventory_stats(self):
+        return self.job_inventory.status()
 
     def diagnostic_names(self,namespace,after='',limit=25):
         root={'documents':'collection/','records':'records/','journal':'journal/'}.get(namespace)

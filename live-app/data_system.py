@@ -234,7 +234,9 @@ def audit_snapshot(collector,clock=None):
         for key,count in job.get('counts',{}).items():group['attempt_outcomes'][key]=group['attempt_outcomes'].get(key,0)+count
         group['rows_saved_across_attempts']+=job.get('rows_saved',0)
     cat=collector.catalogue() or {}
+    inventory=getattr(collector.store,'job_inventory_stats',None)
     report={'checked_at':clock.isoformat(),'job_groups':families,
+            'job_inventory':inventory() if callable(inventory) else {},
             'catalogue_rows':cat.get('rows'),'catalogue_sha256':cat.get('sha256'),
             'unresolved_catalogue_reasons':cat.get('review_reasons',{}),
             'coverage_verified':False,
