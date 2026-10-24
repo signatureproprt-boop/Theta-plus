@@ -85,3 +85,13 @@ def test_endpoint_family_spacing_is_account_shared(monkeypatch):
     with pytest.raises(rate_gate.GateDeferred) as error:
         rate_gate.RateGate('same-account',redis).acquire('chain',6000)
     assert error.value.seconds >= 5
+
+
+def test_retired_worker_build_is_not_a_post_handover_dependency():
+    from app.parallel_budget import ownership_approved
+    sha='a'*64
+    source={'state':'VERIFIED','manifest_sha256':sha}
+    assert ownership_approved({'state':'NEW_BACKEND','archive_manifest_sha256':sha},source)
+    assert not ownership_approved({'state':'NEW_BACKEND','archive_manifest_sha256':'b'*64},source)
+    assert not ownership_approved({'state':'HOLD','archive_manifest_sha256':sha},source)
+    assert not ownership_approved({'state':'NEW_BACKEND','archive_manifest_sha256':sha},{'state':'IMPORTING'})
