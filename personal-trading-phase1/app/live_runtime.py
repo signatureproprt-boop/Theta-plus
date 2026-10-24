@@ -251,12 +251,22 @@ async def run_owned(conn):
         async def shard_event(value):
             await event({**value, 'connection': shard})
         return DhanLiveClient(shard_event, connected, watchlist_loader=watchlist)
-    tasks = [asyncio.create_task(client(shard).run()) for shard in range(settings().live_connections)]
+    clients = [client(shard) for shard in range(settings().live_connections)]
+    tasks = [asyncio.create_task(c.run()) for c in clients]
     tasks += [asyncio.create_task(batch_writer(redis)), asyncio.create_task(maintenance()),
               asyncio.create_task(retained_depth('depth20')), asyncio.create_task(retained_depth('depth200'))]
     try:
         while True:
             await asyncio.sleep(5)
+            def heartbeat():
+                with session() as db:
+                    put_state(db, 'live-connections', {'checked_at': utcnow().isoformat(), 'connections': [
+                        {'connection':i, 'state':'CONNECTED' if c.connected else 'WAITING',
+                         'subscribed':c.subscription_count, 'generation':c.generation,
+                         'connected_since':c.connected_since.isoformat() if c.connected_since else None}
+                         for i,c in enumerate(clients)]})
+                    db.commit()
+            await asyncio.to_thread(heartbeat)
             # Lock and ownership lost => close socket before another local process starts.
             await asyncio.to_thread(conn.execute, text('SELECT 1'))
             await asyncio.to_thread(conn.commit)

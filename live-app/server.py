@@ -419,7 +419,7 @@ def create_app(db_path=None, *, store_override=None, credentials_override=None):
     @app.get('/api/migration/status')
     def migration_status():
         state=store.document('control/migration')[0] or {}
-        return {'protocol':'unified-handover-v1','state':state.get('state','LEGACY_BACKEND')}
+        return {'protocol':'unified-handover-v1','state':state.get('state','LEGACY_BACKEND'),'gateway':'private-vpc-v1'}
 
     @app.get('/api/status')
     def status():
@@ -453,7 +453,8 @@ def create_app(db_path=None, *, store_override=None, credentials_override=None):
             given=request.headers.get('authorization','').removeprefix('Bearer ')
             if not public_workspace and key and not secrets.compare_digest(key,given):return JSONResponse({'detail':'Workspace access key required'},status_code=401)
             origin=request.headers.get('origin')
-            if origin and origin!=f'{request.url.scheme}://{request.headers.get("host")}':return JSONResponse({'detail':'Cross-origin API access rejected'},status_code=403)
+            gateway_origin=os.environ.get('THETA_EMBEDDED')=='1' and origin==f'https://{request.headers.get("host")}'
+            if origin and not gateway_origin and origin!=f'{request.url.scheme}://{request.headers.get("host")}':return JSONResponse({'detail':'Cross-origin API access rejected'},status_code=403)
             if request.method=='POST':
                 if not request.headers.get('content-type','').startswith('application/json'):
                     return JSONResponse({'detail':'Use application/json'},status_code=415)
@@ -614,3 +615,6 @@ def create_app(db_path=None, *, store_override=None, credentials_override=None):
     return app
 
 app=None if os.environ.get('THETA_EMBEDDED')=='1' else create_app()
+if app is not None and os.environ.get('THETA_UNIFIED_UPSTREAM'):
+    from unified_gateway import UnifiedGateway
+    app=UnifiedGateway(app,os.environ['THETA_UNIFIED_UPSTREAM'])

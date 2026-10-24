@@ -29,8 +29,10 @@ def install(app, protected):
         with session() as db:
             state = db.get(SystemState, 'live-health')
             owner = db.get(SystemState, 'collection-owner')
+            connections = db.get(SystemState, 'live-connections')
             return {'live': state.data if state else {'state': 'NOT_STARTED'},
                 'owner': owner.data if owner else {'state': 'AWAITING_VERIFIED_HANDOVER'},
+                'connections': connections.data if connections else {'connections': []},
                 'gap_jobs': dict(db.execute(select(LiveGap.status, func.count()).group_by(LiveGap.status)).all()),
                 'redis_unpersisted_entries': redis.xlen('theta:live:pending'),
                 'mcx': 'HOLD', 'all_market_tick_coverage': False}

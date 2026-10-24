@@ -80,6 +80,8 @@ services:
 
   api:
     <<: *app
+    tmpfs:
+      - /tmp:size=512m,mode=1777
     secrets: [postgres_password, api_key, legacy_admin_hash]
     volumes:
       - ./secrets/dhan_client_id.txt:/run/secrets/dhan_client_id:rw

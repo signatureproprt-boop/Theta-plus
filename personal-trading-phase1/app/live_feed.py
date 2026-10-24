@@ -166,6 +166,9 @@ class DhanLiveClient:
         self.refresh_seconds, self.stable_seconds = refresh_seconds, stable_seconds
         self.generation = 0
         self._running = False
+        self.connected = False
+        self.connected_since = None
+        self.subscription_count = 0
 
     async def _send_subscriptions(self, ws, instruments):
         for start in range(0, len(instruments), 100):
@@ -208,6 +211,8 @@ class DhanLiveClient:
         # Step 2.2 plugs in a fast durable enqueue here, never a REST download.
         await asyncio.wait_for(self.on_session(SessionStarted(
             self.generation, datetime.now(timezone.utc), disconnected_at, instruments)), timeout=2)
+        self.connected = True
+        self.connected_since = datetime.now(timezone.utc)
         receiver = asyncio.create_task(self._receive(ws, instruments))
         monitor = asyncio.create_task(self._monitor(instruments, revision))
         try:
@@ -215,6 +220,7 @@ class DhanLiveClient:
             for task in done:
                 task.result()
         finally:
+            self.connected = False
             receiver.cancel()
             monitor.cancel()
             await asyncio.gather(receiver, monitor, return_exceptions=True)
@@ -234,6 +240,7 @@ class DhanLiveClient:
                 started = None
                 try:
                     instruments = await asyncio.to_thread(self.load_watchlist)
+                    self.subscription_count = len(instruments)
                     creds = await asyncio.to_thread(self.credentials)
                     revision = credential_revision(creds)
                     if not instruments or not all(creds) or revision == blocked_revision:
@@ -272,6 +279,7 @@ class DhanLiveClient:
                     await asyncio.sleep(delay)
         finally:
             self._running = False
+            self.connected = False
             LOG.info('LIVE_STOPPED')
 
 

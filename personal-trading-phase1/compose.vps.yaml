@@ -7,6 +7,8 @@ services:
     volumes:
       - /srv/personal-trading/data/redis:/data
   api:
+    ports:
+      - "${THETA_PRIVATE_IP:-127.0.0.1}:8000:8000"
     volumes:
       - /srv/personal-trading/import:/legacy-import:ro
     image: ${PHASE1_APP_IMAGE:?Set verified release image}

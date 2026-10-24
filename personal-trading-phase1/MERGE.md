@@ -25,7 +25,8 @@ python3 personal-trading-phase1/deploy/merge_cloudshell.py
 ```
 
 The script uses the existing VM and Cloud Shell identity. It does not create a second
-VM, change IAM, expose database/Redis/API ports or delete source data. It first upgrades
+VM, change IAM, expose public database/Redis/API ports or delete source data. It adds
+a dedicated private Cloud Run subnet and restricts VM port 8000 to that source range. It first upgrades
 the release manager to package both source trees, and still requires the named Docker
 integration check to pass. It preserves the old admin password hash and reads/writes
 one shared Dhan credential pair; only API credential file mounts are writable. Other
@@ -38,7 +39,8 @@ The handover performs:
 3. Final delta import, source inventory stability verification, and destination checksums.
 4. Verification of old recording identities against the new master, then activation of
    the new live owner. Mismatched active identities stop handover for review.
-5. Confirmation of a new subscription session and a durable NEW_BACKEND source marker.
+5. Confirmation of every non-empty quote connection, same-URL gateway promotion and
+   a durable NEW_BACKEND source marker.
 
 Failures after fencing stop the new live process and restore the old marker, paused
 Scheduler jobs and collector. Imported data remain for retry. A process kill or loss of
@@ -46,10 +48,17 @@ Cloud Shell during the critical section can leave FENCED; inspect and recover it
 before rerunning. Source archive is never deleted. Archive verification does not certify
 all instrument/date coverage or a complete conversion of every old data format.
 
-Public URL cutover is NOT automatic: the VM API remains loopback-only. The script prints
-an IAP SSH tunnel command; use Cloud Shell Web Preview port 8080 to open the merged UI.
-The previous run.app URL remains the preserved source until an HTTPS gateway/domain is
-configured. No insecure public port is opened as a shortcut.
+The existing run.app URL remains the single user entry point. The owner script prepares
+and probes a no-traffic Cloud Run gateway candidate with Direct VPC egress, while the
+VM API keeps its loopback binding plus an internal-IP binding. A dedicated source subnet
+and VM-specific allow/deny firewall rules restrict port 8000; there is no public API port.
+Only after data import and live-owner verification does traffic move to that candidate.
+HTTP and browser WebSocket requests reach the merged app. Health/fence routes stay local
+on Cloud Run so rollback and deployments can still verify the source fence. Failure
+restores original traffic and the original network-free service template. The original
+GCS archive remains available for recovery, with no automatic writes by the old collector.
+Source documentation: https://docs.cloud.google.com/run/docs/configuring/vpc-direct-vpc
+
 
 ## Phase 2 in the unified runtime
 

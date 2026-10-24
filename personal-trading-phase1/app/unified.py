@@ -23,7 +23,7 @@ def mount_workspace(app):
     os.environ['THETA_AUTH_MODE'] = 'public'
     os.environ.pop('THETA_COLLECTION_WORKER', None)
     os.environ.pop('THETA_GCS_BUCKET', None)
-    os.environ.setdefault('THETA_ALLOWED_HOSTS', 'localhost,127.0.0.1,testserver')
+    os.environ.setdefault('THETA_ALLOWED_HOSTS', 'localhost,127.0.0.1,testserver,theta-plus-jw4jpkebxa-el.a.run.app')
     spec = importlib.util.spec_from_file_location('theta_retained_server', root / 'server.py')
     legacy = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(legacy)
@@ -123,9 +123,13 @@ def mount_workspace(app):
         with session() as db:
             migration = db.get(SystemState, 'legacy-migration')
             owner = db.get(SystemState, 'collection-owner')
+            connections = db.get(SystemState, 'live-connections')
+            live = db.get(SystemState, 'live-health')
             return {'system': 'Theta Plus', 'storage': 'PostgreSQL + TimescaleDB',
                     'mcx': 'HOLD', 'legacy_background_engine': 'DISABLED_IN_THIS_DEPLOYMENT',
                     'migration': migration.data if migration else {'state': 'AWAITING_ARCHIVE_IMPORT'},
+                    'live': live.data if live else {'state': 'NOT_STARTED'},
+                    'live_connections': connections.data if connections else {'connections': []},
                     'owner': owner.data if owner else {'state': 'WAITING_FOR_VERIFIED_HANDOVER'}}
 
     app.mount('/', workspace)

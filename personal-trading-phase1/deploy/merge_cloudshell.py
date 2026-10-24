@@ -13,6 +13,7 @@ import tempfile
 import time
 import uuid
 from urllib.request import urlopen
+from datetime import datetime, timezone
 
 PROJECT, ZONE, REGION = 'theta-pluse', 'asia-south1-a', 'asia-south1'
 VM, JOB = 'personal-trading-phase1', 'theta-plus-collector'
@@ -104,6 +105,20 @@ def mirror_and_import(folder, quiescent=False):
     return receipt
 
 
+def live_transport_ready(status):
+    snapshot=status.get('connections',{})
+    rows=[r for r in snapshot.get('connections',[]) if r.get('subscribed',0)>0]
+    if not rows or not snapshot.get('checked_at'):return False
+    checked=datetime.fromisoformat(snapshot['checked_at'])
+    activated=status.get('owner',{}).get('checked_at')
+    if not activated or checked < datetime.fromisoformat(activated) or not 0 <= (datetime.now(timezone.utc)-checked).total_seconds() <= 20:
+        return False
+    expected=status.get('owner',{}).get('retained_recording_identities',0)
+    return (sum(r['subscribed'] for r in rows)>=max(1,expected) and all(
+        r.get('state')=='CONNECTED' and r.get('connected_since') and
+        (checked-datetime.fromisoformat(r['connected_since'])).total_seconds()>=5 for r in rows))
+
+
 def main():
     sha = run('git', 'rev-parse', 'HEAD', capture=True)
     if not re.fullmatch('[a-f0-9]{40}', sha): raise RuntimeError('INVALID_REVISION')
@@ -139,11 +154,23 @@ def main():
             cloud('compute','scp',str(secure),VM+':~/theta-legacy-admin-hash.txt','--zone='+ZONE,'--tunnel-through-iap',capture=True)
             ssh('sudo cp ~/theta-legacy-admin-hash.txt /srv/personal-trading/secrets/legacy_admin_hash.txt && sudo chmod 0644 /srv/personal-trading/secrets/legacy_admin_hash.txt')
         with urlopen('https://theta-plus-jw4jpkebxa-el.a.run.app/api/migration/status', timeout=30) as response:
-            if json.load(response).get('protocol') != 'unified-handover-v1':
+            capability=json.load(response)
+            if capability.get('protocol') != 'unified-handover-v1' or capability.get('gateway') != 'private-vpc-v1':
                 raise RuntimeError('LEGACY_FENCE_SUPPORT_NOT_DEPLOYED')
         print('MERGE_STAGE_1_COPY_AND_VERIFY_ARCHIVE', flush=True)
-        first = mirror_and_import(folder)
-        if first.get('state') != 'VERIFIED': raise RuntimeError('INITIAL_IMPORT_NOT_VERIFIED')
+        from gateway_cloudshell import GatewayHandover
+        gateway=GatewayHandover(cloud,remote,ssh,PROJECT,REGION,ZONE,VM)
+        try:
+            gateway.prepare()
+        except Exception:
+            gateway.rollback()
+            raise
+        try:
+            first = mirror_and_import(folder)
+            if first.get('state') != 'VERIFIED': raise RuntimeError('INITIAL_IMPORT_NOT_VERIFIED')
+        except Exception:
+            gateway.rollback()
+            raise
         paused, fenced, active = [], False, False
         try:
             print('MERGE_STAGE_2_FENCE_AND_STOP_PREVIOUS_COLLECTOR', flush=True)
@@ -178,16 +205,18 @@ def main():
             remote('sudo','docker','start','personal-trading-phase1-live-1')
             for _ in range(30):
                 result = json.loads(api_module('app.verify_phase1','live-status',capture=True))
-                if result.get('live',{}).get('state') in ('SUBSCRIPTIONS_SENT','RECEIVING'): break
+                if live_transport_ready(result): break
                 time.sleep(2)
             else: raise RuntimeError('NEW_LIVE_CONNECTION_NOT_VERIFIED')
+            gateway.verify_catalogue()
+            gateway.promote()
             set_fence(folder, {'state':'NEW_BACKEND','owner':owner,'target':VM,
                 'objects':final['objects'],'manifest_sha256':final['manifest_sha256']}, generation)
             print('UNIFIED_ARCHIVE_VERIFIED_AND_LIVE_HANDOVER_COMPLETE', final['objects'])
             print('Source archive retained. MCX HOLD. All-market tick coverage is not claimed.')
-            print('Open the merged website through an SSH tunnel; public URL cutover is separate:')
-            print('gcloud compute ssh '+VM+' --project='+PROJECT+' --zone='+ZONE+' --tunnel-through-iap -- -N -L 8080:127.0.0.1:8000')
+            print('OPEN_THE_SAME_THETA_PLUS_URL https://theta-plus-jw4jpkebxa-el.a.run.app')
         except Exception:
+            gateway.rollback()
             # Stop/fence the new live process before resuming the old account owner.
             if active:
                 remote('sudo','docker','stop','personal-trading-phase1-live-1')
