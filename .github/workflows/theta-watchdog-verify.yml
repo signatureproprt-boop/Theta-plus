@@ -1,0 +1,60 @@
+name: Verify Theta automatic restart
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/theta-watchdog-verify.yml']
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    concurrency:
+      group: theta-plus-production-release
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate approved destination and date
+        env:
+          PROVIDER: ${{ vars.THETA_WIF_PROVIDER }}
+          DEPLOYER: ${{ vars.THETA_DEPLOY_SERVICE_ACCOUNT }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+          assert datetime.now(ZoneInfo('Asia/Kolkata')).date().isoformat()=='2026-10-24','Authorized closed-market date only'
+          assert os.environ['DEPLOYER']=='theta-plus-github@theta-pluse.iam.gserviceaccount.com'
+          assert os.environ['PROVIDER']=='projects/261331732835/locations/global/workloadIdentityPools/theta-github-deploy/providers/github'
+          PY
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: theta-pluse
+          workload_identity_provider: ${{ vars.THETA_WIF_PROVIDER }}
+          service_account: ${{ vars.THETA_DEPLOY_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v3
+      - name: Apply approved read-only Scheduler Viewer grant
+        run: |
+          gcloud projects add-iam-policy-binding theta-pluse --member=serviceAccount:theta-plus-github@theta-pluse.iam.gserviceaccount.com --role=roles/cloudscheduler.viewer --condition=None --quiet --format=none
+      - name: Verify Scheduler read access propagation
+        run: |
+          python3 - <<'PY'
+          import subprocess,time,re,json
+          for attempt in range(12):
+              r=subprocess.run(['gcloud','scheduler','jobs','list','--project=theta-pluse','--location=asia-south1','--format=json'],capture_output=True,text=True)
+              if r.returncode==0:
+                  jobs=json.loads(r.stdout)
+                  print(json.dumps({'state':'SCHEDULER_READ_VERIFIED','jobs':[{'name':j.get('name'),'state':j.get('state'),'schedule':j.get('schedule'),'target':j.get('httpTarget',{}).get('uri')} for j in jobs]}))
+                  break
+              if attempt==11:
+                  print(json.dumps({'state':'SCHEDULER_READ_FAILED','diagnostic_tokens':re.findall(r'PERMISSION_DENIED|SERVICE_DISABLED|UNAUTHENTICATED|INVALID_ARGUMENT|NOT_FOUND|cloudscheduler\.[A-Za-z.]+',r.stderr)}))
+                  raise SystemExit(1)
+              time.sleep(5)
+          PY
+      - name: Verify unattended restart and retained checkpoints
+        working-directory: live-app
+        run: python3 deploy/verify_watchdog.py
