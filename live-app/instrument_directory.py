@@ -114,6 +114,8 @@ class InstrumentDirectory:
             where.append('(expiry IS NULL OR expiry>=?)'); args.append(datetime.now(IST).date().isoformat())
         clause = ' AND '.join(where)
         with self.database() as (db, cat):
+            mapping_total=db.execute("SELECT count(*) FROM instruments WHERE segment='UNMAPPED'").fetchone()[0]
+            mapping_current=db.execute("SELECT count(*) FROM instruments WHERE segment='UNMAPPED' AND (expiry IS NULL OR expiry>=?)",[datetime.now(IST).date().isoformat()]).fetchone()[0]
             count = db.execute('SELECT count(*) FROM instruments WHERE '+clause, args).fetchone()[0]
             rows = db.execute('SELECT document FROM instruments WHERE '+clause+' ORDER BY rank,symbol,expiry,position LIMIT 50 OFFSET ?', [*args, page*50]).fetchall()
         items=[json.loads(row[0]) for row in rows]
@@ -124,6 +126,7 @@ class InstrumentDirectory:
                 'catalogue_rows': cat['rows'], 'matches': count, 'page': page,
                 'next_page': page+1 if (page+1)*50 < count else None,
                 'items':items,'category':category,'segments': SEGMENT_NAMES,
+                'mapping_review':{'total':mapping_total,'current':mapping_current,'expired':mapping_total-mapping_current,'state':'API_SEGMENT_UNVERIFIED'},
                 'review_reasons': cat.get('review_reasons', {}),
                 'coverage_note': 'Catalogue discovery is not data coverage. Quotes/history require separate provider responses.'}
 
@@ -170,6 +173,7 @@ class InstrumentDirectory:
         if len(wanted)>30 or any(not re.fullmatch('[a-zA-Z0-9_-]{1,128}',k) for k in wanted):raise HTTPException(422,'Use at most 30 catalogue keys')
         today=datetime.now(IST).date().isoformat()
         with self.database() as (db,cat):
+            mapping_total=db.execute("SELECT count(*) FROM instruments WHERE segment='UNMAPPED'").fetchone()[0]
             counts={name:db.execute('SELECT count(*) FROM instruments WHERE ('+clause+') AND (expiry IS NULL OR expiry>=?)',[today]).fetchone()[0] for name,clause in CATEGORIES.items()}
             if wanted:
                 rows=db.execute('SELECT document FROM instruments WHERE key IN ('+','.join('?' for _ in wanted)+')',wanted).fetchall()
@@ -191,7 +195,7 @@ class InstrumentDirectory:
             indices.sort(key=lambda i:index_names.index(re.sub('[ _]','',i['symbol'])))
         quotes=self.saved_quotes(items+indices)
         return {'catalogue_sha256':cat['sha256'],'catalogue_rows':cat['rows'],'catalogue_at':cat.get('fetched_at'),
-                'counts':counts,'watchlist':[{**i,'saved_quote':quotes.get(i['key'])} for i in items],
+                'counts':counts,'mapping_review':{'total':mapping_total,'current':counts['unmapped'],'expired':mapping_total-counts['unmapped'],'state':'API_SEGMENT_UNVERIFIED'},'watchlist':[{**i,'saved_quote':quotes.get(i['key'])} for i in items],
                 'indices':[{**i,'saved_quote':quotes.get(i['key'])} for i in indices],
                 'unresolved':sum(cat.get('review_reasons',{}).values()),'missing_watchlist_keys':[k for k in wanted if k not in {i['key'] for i in items}],
                 'snapshot_read_errors':self.snapshot_errors,

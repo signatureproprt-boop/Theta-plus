@@ -96,3 +96,19 @@ async def check(collector):
     await asyncio.to_thread(collector.store.add,'segment_probe_source',report)
     await asyncio.to_thread(replace,collector.store,REPORT,lambda _:report)
     return {k:v for k,v in report.items() if k!='raw'}
+
+async def refresh_if_due(collector,clock=None):
+    """One bounded support check per IST day/master, with busy retry cooldown."""
+    clock=clock or datetime.now(timezone.utc)
+    cat=await asyncio.to_thread(collector.catalogue)
+    if not cat or not cat.get('review_reasons'):return public_report(collector.store)
+    previous=await asyncio.to_thread(public_report,collector.store)
+    try:checked=datetime.fromisoformat(previous['checked_at']).astimezone(IST).date()
+    except (KeyError,TypeError,ValueError):checked=None
+    if checked==clock.astimezone(IST).date() and previous.get('catalogue_sha256')==cat['sha256']:
+        return previous
+    state=(await asyncio.to_thread(collector.store.document,'control/segment-probe-schedule'))[0] or {}
+    if state.get('next_attempt_at',0)>clock.timestamp():return previous
+    await asyncio.to_thread(replace,collector.store,'control/segment-probe-schedule',lambda old:{
+        **(old or {}),'last_attempt_at':clock.isoformat(),'next_attempt_at':clock.timestamp()+3600})
+    return await check(collector)

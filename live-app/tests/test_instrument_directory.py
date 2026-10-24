@@ -267,3 +267,14 @@ def test_home_matches_trading_symbols_with_legal_names_and_next50_alias(director
 def test_home_fallback_prefers_cash_stocks(directory):
     seed(directory.collector,[item(),item('cash',symbol='OTHER COMPANY',segment='NSE_EQ',instrument='EQUITY')],'d'*64)
     assert directory.overview()['watchlist'][0]['key']=='cash'
+
+
+def test_mapping_review_reconciles_current_expired_and_all_contracts(directory):
+    entries=[item('current',segment=None,instrument='OPTFUT',expiry='2099-01-01',reason='NSE_M unverified'),
+             item('expired',segment=None,instrument='OPTFUT',expiry='2000-01-01',reason='NSE_M unverified')]
+    seed(directory.collector,entries,'e'*64)
+    data=directory.search(category='unmapped')
+    assert data['matches']==1
+    assert data['mapping_review']=={'total':2,'current':1,'expired':1,'state':'API_SEGMENT_UNVERIFIED'}
+    assert directory.search(category='unmapped',active_only=False)['matches']==2
+    assert directory.overview()['mapping_review']==data['mapping_review']

@@ -142,6 +142,10 @@ def schedule_history(collector,clock=None):
             'last_schedule_at':clock.isoformat(),'calendar':session(closed)})
     return slots
 
+def recover_core_sessions(collector,clock=None):
+    from session_recovery import tick
+    return tick(collector,clock)
+
 def schedule_quotes(collector,clock=None):
     clock=clock or now();store=collector.store;state=store.document('system/quote-sweep')[0] or {}
     if not state:
@@ -376,11 +380,16 @@ async def maintenance(collector,stop):
         except Exception as error:await failed('instrument_discovery',error)
         # History/sweep failures do not stop recording, and discovery failures
         # do not prevent independent daily catch-up from preserving its cursor.
-        for stage,operation in (('backfill_schedule',bootstrap_history),('daily_schedule',schedule_history),
+        for stage,operation in (('backfill_schedule',bootstrap_history),('daily_schedule',schedule_history),('core_session_recovery',recover_core_sessions),
                                 ('quote_schedule',schedule_quotes),('chain_schedule',schedule_chains),('data_audit',audit_snapshot)):
             try:await asyncio.to_thread(operation,collector)
             except asyncio.CancelledError:raise
             except Exception as error:await failed(stage,error)
+        try:
+            from segment_probe import refresh_if_due
+            await refresh_if_due(collector)
+        except asyncio.CancelledError:raise
+        except Exception as error:await failed('segment_support_probe',error)
         if trading_state(now())=='OPEN':
             await refresh_current(collector,board,failed)
         await asyncio.to_thread(replace,store,'system/maintenance',lambda old:{**(old or {}),
@@ -417,6 +426,7 @@ async def supervise(collector,stop):
 
 def status(store,clock=None):
     from build_identity import runtime_build
+    from segment_probe import public_report
     clock=clock or now();config=store.document(CONTROL)[0] or {};plan=store.document(SCOPE)[0] or {}
     worker=store.document('control/worker')[0] or {}
     doctor=store.document('doctor/current')[0] or {}
@@ -456,6 +466,8 @@ def status(store,clock=None):
             'live_capacity_excluded':plan.get('live_capacity_excluded'),'live_candidate_count':plan.get('live_candidate_count'),
             'live_capacity':plan.get('live_capacity',10000),'interactive_connection_reserved':plan.get('interactive_connection_reserved',True),'all_market_continuous':False,
             'depth20_unsubscribed':plan.get('depth20_unsubscribed'),'depth20_scope':plan.get('depth20_scope'),
+            'session_recovery':store.document('system/session-recovery')[0] or {},
+            'segment_probe':public_report(store),
             'streams':streams,'maintenance':store.document('system/maintenance')[0] or {},
             'quote_sweep':store.document('system/quote-sweep')[0] or {},
             'chain_sweep':store.document('system/chain-sweep')[0] or {},

@@ -47,6 +47,7 @@
       const segment=el('segment'),selected=state.filters.segment;
       segment.replaceChildren(new Option('All segments',''),...data.segments.map(s=>new Option(s,s)),new Option('Unmapped / needs review','UNMAPPED'));segment.value=selected;
       el('status').textContent=`${data.matches.toLocaleString()} matches · master ${data.catalogue_rows.toLocaleString()} rows · page ${data.page+1} · source ${data.catalogue_at}. ${data.coverage_note}`;
+      if(state.filters.category==='unmapped'&&data.mapping_review)el('status').textContent+=` Whole-master mapping review: ${data.mapping_review.total} total · ${data.mapping_review.current} current · ${data.mapping_review.expired} expired. API segment support remains unverified.`;
       el('rows').replaceChildren();
       data.items.forEach((item,index)=>{
         const row=document.createElement('tr');

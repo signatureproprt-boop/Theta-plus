@@ -925,7 +925,7 @@ class Collector:
         return {'items':[{'key':k,**self.store.document(k)[0]} for k in names[:50]],
                 'next_cursor':names[49] if len(names)>50 else None}
 
-    def retry(self,jid,key,quarantine_invalid=False,child_id=None,history_ranges=None):
+    def retry(self,jid,key,quarantine_invalid=False,child_id=None,history_ranges=None,session_day=None):
         self.get_job(jid)
         if not key.startswith('results/'+jid+'/'):raise HTTPException(422,'Invalid result key')
         entry=self.store.document(key)[0]
@@ -942,6 +942,10 @@ class Collector:
                 raise HTTPException(422,'Choose a validated long daily-history rejection for bounded recovery')
         if entry['task']['family']=='rolling' and entry['task']['item']['instrument']=='OPTIDX' and parent.get('rolling_identity_version')!=2:
             raise HTTPException(422,'Legacy rolling index identity requires a new Expired options plan; original results retained.')
+        if session_day is not None:
+            from session_recovery import session_days
+            if history_ranges is not None or session_day not in session_days(entry):
+                raise HTTPException(422,'Choose an exact verified missing core session')
         if child_id:
             existing=self.store.document('jobs/'+child_id)[0]
             if existing:return self.summary(existing)
@@ -960,6 +964,13 @@ class Collector:
                 symbols=[task['item']['symbol']],segments=[task['item']['segment']],
                 continue_rejected_requests=True,quarantine_invalid_candles=True)
             child['message']='Bounded daily probe ready; earlier windows run only after valid source rows are observed.'
+        if session_day is not None:
+            stop=(date.fromisoformat(session_day)+timedelta(days=1)).isoformat()
+            child['current']={**entry['task'],'from':session_day,'to':stop}
+            child['config'].update(start=session_day,end=stop,continue_rejected_requests=True,quarantine_invalid_candles=True)
+            child.update(repair_scope='missing_core_session_v1',session_recovery_day=session_day,
+                system_role='core_session_recovery_'+entry['task']['family'],
+                message='Exact missing core session queued; original source outcome retained.')
         if quarantine_invalid:child['config']['quarantine_invalid_candles']=True
         if entry['task']['family'] in ('quotes','live','depth20','depth200') and entry['result'].get('missing_security_ids'):
             missing=set(entry['result']['missing_security_ids'])

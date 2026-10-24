@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 import requests
 
-from collection import Collector,SEGMENTS
+from collection import Collector,SEGMENTS,replace
 from provider import Dhan,ProviderError
 from segment_probe import check,public_report,REPORT
 from store import Store
@@ -103,3 +103,20 @@ def test_stale_master_does_not_send_any_probe(tmp_path):
     c.store.put_document('catalogue/current',cat,c.store.document('catalogue/current')[1])
     assert asyncio.run(check(c))['state']=='CATALOGUE_STALE'
     assert c.store.document('control/lease')[0] is None
+
+
+def test_unattended_probe_refreshes_on_new_ist_day_and_uses_busy_cooldown(tmp_path,monkeypatch):
+    import segment_probe as module
+    from datetime import datetime,timezone,timedelta
+    class Provider:pass
+    c,cat=setup(tmp_path,Provider());cat['review_reasons']={'NSE_M':2}
+    replace(c.store,'catalogue/current',lambda _:cat)
+    clock=datetime(2026,10,24,4,tzinfo=timezone.utc);calls=[]
+    async def busy(collector):calls.append(1);return {'state':'COLLECTOR_BUSY'}
+    monkeypatch.setattr(module,'check',busy)
+    asyncio.run(module.refresh_if_due(c,clock));asyncio.run(module.refresh_if_due(c,clock+timedelta(minutes=20)))
+    assert len(calls)==1
+    asyncio.run(module.refresh_if_due(c,clock+timedelta(hours=1)));assert len(calls)==2
+    replace(c.store,REPORT,lambda _:{'checked_at':clock.isoformat(),'catalogue_sha256':cat['sha256'],'state':'NO_MATCHING_QUOTE'})
+    asyncio.run(module.refresh_if_due(c,clock+timedelta(hours=2)));assert len(calls)==2
+    asyncio.run(module.refresh_if_due(c,clock+timedelta(days=1)));assert len(calls)==3
