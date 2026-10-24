@@ -234,7 +234,7 @@ def test_api_mutations_require_existing_admin(tmp_path,monkeypatch):
     assert client.get('/api/collection/catalogue').json()=={}
     assert client.get('/api/collection/export/control/lease').status_code==422
     assert client.get('/api/collection/jobs/not-a-job').status_code==404
-    assert 'Collect all data' in client.get('/').text
+    assert 'data-page="collect">Data collection' in client.get('/').text
 
 def test_daily_quota_is_reserved_across_instances(tmp_path):
     from collection import now
