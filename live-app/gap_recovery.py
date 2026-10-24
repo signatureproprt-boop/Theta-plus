@@ -133,7 +133,7 @@ def select_recovery_source(sources,state):
     Separate durable positions keep both queues moving. Quote/feed-only roots
     cannot delay historical recovery; original result cursors remain untouched.
     """
-    priority_roles={'all_daily','all_intraday','all_daily_earlier'}
+    priority_roles={'all_daily','all_intraday','all_daily_earlier','equity_recent_daily','equity_recent_intraday'}
     priority=[j for j in sources if j.get('system_role') in priority_roles]
     priority_ids={j['id'] for j in priority}
     general=[j for j in sources if j['id'] not in priority_ids]
@@ -162,7 +162,7 @@ def tick(collector):
         return False # Drain first; do not spin if all eight need credentials.
     sources=sorted((j for j in jobs if not j.get('retry_of') and not j.get('system_user_paused') and j['state'] in ('running','completed')
         and set(j.get('config',{}).get('families',[])) & {'daily','intraday','rolling'}),
-        key=lambda j:(0 if j.get('system_role') in ('all_daily','all_intraday','all_rolling','all_daily_earlier') else 1,j['id']))
+        key=lambda j:(0 if j.get('system_role') in ('all_daily','all_intraday','all_rolling','all_daily_earlier','equity_recent_daily','equity_recent_intraday') else 1,j['id']))
     if not sources:return False
     parent,positions,has_priority,wrapped=select_recovery_source(sources,state);jid=parent['id']
     cursors=dict(state.get('cursors',{}));page=collector.results(jid,cursors.get(jid,''))

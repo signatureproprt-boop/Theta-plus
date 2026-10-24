@@ -142,6 +142,10 @@ def schedule_history(collector,clock=None):
             'last_schedule_at':clock.isoformat(),'calendar':session(closed)})
     return slots
 
+def schedule_equity_catchup(collector,clock=None):
+    from equity_catchup import schedule
+    return schedule(collector,clock)
+
 def refresh_whole_market(collector,clock=None):
     from whole_market import refresh
     return refresh(collector,clock)
@@ -384,7 +388,7 @@ async def maintenance(collector,stop):
         except Exception as error:await failed('instrument_discovery',error)
         # History/sweep failures do not stop recording, and discovery failures
         # do not prevent independent daily catch-up from preserving its cursor.
-        for stage,operation in (('backfill_schedule',bootstrap_history),('daily_schedule',schedule_history),('core_session_recovery',recover_core_sessions),('whole_market_scope',refresh_whole_market),
+        for stage,operation in (('backfill_schedule',bootstrap_history),('daily_schedule',schedule_history),('core_session_recovery',recover_core_sessions),('equity_recent_catchup',schedule_equity_catchup),('whole_market_scope',refresh_whole_market),
                                 ('quote_schedule',schedule_quotes),('chain_schedule',schedule_chains),('data_audit',audit_snapshot)):
             try:await asyncio.to_thread(operation,collector)
             except asyncio.CancelledError:raise

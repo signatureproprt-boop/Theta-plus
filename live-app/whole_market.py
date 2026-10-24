@@ -78,6 +78,11 @@ def refresh(collector,clock=None):
     maintenance=(store.document('system/maintenance')[0] or {}).get('history',{})
     for role,slot in maintenance.items():
         if role.startswith('all_') and slot.get('job_id'):append(slot['job_id'],role)
+    equity=(store.document('system/equity-catchup')[0] or {}).get('families',{})
+    for family,slot in equity.items():
+        ids=list(slot.get('job_ids',[]))
+        if slot.get('latest_job_id') and slot['latest_job_id'] not in ids:ids.append(slot['latest_job_id'])
+        for jid in ids:append(jid,'equity_recent_'+family)
     earlier={}
     if roots.get('daily'):
         try:earlier=earlier_daily(collector,cat,collector.get_job(roots['daily']))
