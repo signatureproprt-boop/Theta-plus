@@ -1,0 +1,33 @@
+name: Inspect Theta watchdog access
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/theta-watchdog-inspect.yml']
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: theta-pluse
+          workload_identity_provider: ${{ vars.THETA_WIF_PROVIDER }}
+          service_account: ${{ vars.THETA_DEPLOY_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v3
+      - name: Read-only Scheduler diagnosis
+        run: |
+          python3 - <<'PY'
+          import subprocess,json,re
+          result=subprocess.run(['gcloud','scheduler','jobs','list','--project=theta-pluse','--location=asia-south1','--format=json'],capture_output=True,text=True)
+          if result.returncode:
+              tokens=re.findall(r'PERMISSION_DENIED|SERVICE_DISABLED|UNAUTHENTICATED|INVALID_ARGUMENT|NOT_FOUND|cloudscheduler\.[A-Za-z.]+|unrecognized arguments|not enabled',result.stderr)
+              print(json.dumps({'state':'READ_FAILED','returncode':result.returncode,'diagnostic_tokens':tokens}))
+              raise SystemExit(1)
+          jobs=json.loads(result.stdout)
+          print(json.dumps({'state':'READ_SUCCEEDED','jobs':[{'name':j.get('name'),'state':j.get('state'),'schedule':j.get('schedule'),'target':j.get('httpTarget',{}).get('uri')} for j in jobs]}))
+          PY
