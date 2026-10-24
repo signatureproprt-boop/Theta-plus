@@ -1,0 +1,115 @@
+name: personal-trading-phase1
+
+x-app: &app
+  build: .
+  image: personal-trading-phase1:local
+  env_file: .env
+  environment:
+    DB_HOST: postgres
+    DB_NAME: trading
+    DB_USER: trading
+    DB_PASSWORD_FILE: /run/secrets/postgres_password
+    DHAN_CLIENT_ID_FILE: /run/secrets/dhan_client_id
+    DHAN_ACCESS_TOKEN_FILE: /run/secrets/dhan_access_token
+    API_KEY_FILE: /run/secrets/api_key
+    REDIS_URL: redis://redis:6379/0
+  secrets:
+    - postgres_password
+    - dhan_client_id
+    - dhan_access_token
+    - api_key
+  init: true
+  restart: unless-stopped
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+  security_opt:
+    - no-new-privileges:true
+  cap_drop: [ALL]
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "3"
+
+services:
+  postgres:
+    image: ${TIMESCALE_IMAGE:-timescale/timescaledb:latest-pg17}
+    environment:
+      POSTGRES_DB: trading
+      POSTGRES_USER: trading
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      TZ: UTC
+    secrets: [postgres_password]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    shm_size: 256mb
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U trading -d trading"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+
+  redis:
+    image: ${REDIS_IMAGE:-redis:7.4-alpine}
+    command: [redis-server, --appendonly, "yes", --appendfsync, everysec, --maxmemory, 512mb, --maxmemory-policy, noeviction]
+    volumes: [redis_data:/data]
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+
+  migrate:
+    <<: *app
+    command: [python, -m, app.migrate]
+    restart: "no"
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  api:
+    <<: *app
+    command: [uvicorn, app.main:app, --host, 0.0.0.0, --port, "8000", --no-access-log]
+    ports: ["127.0.0.1:${API_PORT:-8000}:8000"]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+
+  worker:
+    <<: *app
+    command: [celery, -A, app.celery_app:celery_app, worker, --loglevel=INFO, --concurrency=2, --prefetch-multiplier=1, --queues=history, --hostname=history@%h]
+    stop_grace_period: 2m
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+
+  dispatcher:
+    <<: *app
+    command: [python, -m, app.dispatcher]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+
+volumes:
+  postgres_data:
+  redis_data:
+
+secrets:
+  postgres_password: {file: ./secrets/postgres_password.txt}
+  dhan_client_id: {file: ./secrets/dhan_client_id.txt}
+  dhan_access_token: {file: ./secrets/dhan_access_token.txt}
+  api_key: {file: ./secrets/api_key.txt}
