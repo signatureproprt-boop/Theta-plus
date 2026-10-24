@@ -278,3 +278,18 @@ def test_mapping_review_reconciles_current_expired_and_all_contracts(directory):
     assert data['mapping_review']=={'total':2,'current':1,'expired':1,'state':'API_SEGMENT_UNVERIFIED'}
     assert directory.search(category='unmapped',active_only=False)['matches']==2
     assert directory.overview()['mapping_review']==data['mapping_review']
+
+
+def test_date_wise_saved_coverage_distinguishes_missing_minutes_and_unknown_calendar(directory):
+    from test_collection import candles
+    task={'family':'intraday','item':directory.resolve('index',SHA),'variant':{'interval':'1'},'from':'2026-10-19','to':'2026-10-20'}
+    directory.collector.persist_candles(task,{'raw':candles('2026-10-19')})
+    result=directory.saved_history('index',SHA,date(2026,10,19),date(2026,10,21))
+    days={d['date']:d for d in result['session_coverage']}
+    assert days['2026-10-19']['received_rows']==1 and days['2026-10-19']['missing_minutes']==374
+    assert days['2026-10-19']['session_grid_complete'] is False
+    assert days['2026-10-20']['state']=='NO_REGULAR_SESSIONS'
+    seed(directory.collector,[item('bse',exchange='BSE',segment='BSE_EQ',raw_segment='E',instrument='EQUITY')],'b'*64)
+    result=directory.saved_history('bse','b'*64,date(2026,10,19),date(2026,10,20))
+    assert result['session_coverage'][0]['calendar_verified'] is False
+    assert result['session_coverage'][0]['missing_minutes'] is None

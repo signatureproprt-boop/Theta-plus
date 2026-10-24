@@ -363,6 +363,10 @@ def create_app(db_path=None):
         if family not in ('live','live-extra','depth20','depth200'):raise HTTPException(422,'Unknown feed family')
         return store.document('system/latest/'+family)[0] or {}
 
+    @app.get('/api/collection/whole-market')
+    def collection_whole_market():
+        return store.document('system/whole-market')[0] or {'state':'NOT_CHECKED','coverage_verified':False}
+
     @app.get('/api/collection/session-recovery')
     def collection_session_recovery():
         return store.document('system/session-recovery')[0] or {'state':'NOT_CHECKED','coverage_verified':False}

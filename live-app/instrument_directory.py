@@ -130,6 +130,19 @@ class InstrumentDirectory:
                 'review_reasons': cat.get('review_reasons', {}),
                 'coverage_note': 'Catalogue discovery is not data coverage. Quotes/history require separate provider responses.'}
 
+    def market_scope(self):
+        today=datetime.now(IST).date().isoformat()
+        with self.database() as (db,cat):
+            rows=db.execute("SELECT exchange,raw_segment,segment,count(*),sum(CASE WHEN expiry IS NULL OR expiry>=? THEN 1 ELSE 0 END) FROM instruments GROUP BY exchange,raw_segment,segment ORDER BY exchange,raw_segment",[today]).fetchall()
+        segments=[{'exchange':x,'master_segment':raw,'api_segment':None if segment=='UNMAPPED' else segment,
+            'total':total,'current':current,'expired':total-current,'mapping_state':'UNVERIFIED' if segment=='UNMAPPED' else 'DOCUMENTED_SEGMENT'}
+            for x,raw,segment,total,current in rows]
+        return {'catalogue_sha256':cat['sha256'],'catalogue_at':cat.get('fetched_at'),'catalogue_rows':cat['rows'],
+            'mapped_rows':sum(r['total'] for r in segments if r['api_segment']),
+            'current_mapped':sum(r['current'] for r in segments if r['api_segment']),
+            'unmapped_rows':sum(r['total'] for r in segments if not r['api_segment']),
+            'segments':segments}
+
     def saved_quotes(self,items):
         from data_system import LIVE_STREAMS
         with self.snapshot_lock:
@@ -230,9 +243,19 @@ class InstrumentDirectory:
                     candles[int(stamp)]=value
                 except (KeyError,ValueError,TypeError,OverflowError,OSError):invalid+=1
         rows=[candles[t] for t in sorted(candles) if t not in conflicts];truncated=max(0,len(rows)-50000)
+        from history_grid import requested_grid
+        sessions=[]
+        for day in days:
+            selected=[r for r in rows if datetime.fromtimestamp(r['time'],timezone.utc).astimezone(IST).date().isoformat()==day]
+            task={'item':item,'family':family,'variant':variant,'from':day,'to':(date.fromisoformat(day)+timedelta(days=1)).isoformat()}
+            grid=requested_grid(task,{day:{str(r['time']):{'timestamp':r['time']} for r in selected}})
+            sessions.append({'date':day,'received_rows':len(selected),'source_partition_present':day in found,
+                'calendar_verified':grid.get('calendar_verified',False),'session_grid_complete':grid.get('session_grid_complete',False) and not (invalid or conflicts),
+                'missing_minutes':grid.get('missing_minutes'),'missing_sessions':grid.get('missing_sessions'),
+                'state':'SAVED_ROWS_NEED_REVIEW' if invalid or conflicts else grid.get('coverage'),'invalid_or_conflicting_rows_present':bool(invalid or conflicts)})
         return {'instrument':item,'series':series,'family':family,'interval':interval,'from':start.isoformat(),'to_exclusive':end.isoformat(),
                 'candles':rows[-50000:],'rows':min(50000,len(rows)),'truncated_rows':truncated,'invalid_excluded':invalid,'conflicting_timestamps':len(conflicts),
-                'available_days':found,'absent_partitions':[d for d in days if d not in found],
+                'session_coverage':sessions,'available_days':found,'absent_partitions':[d for d in days if d not in found],
                 'state':'RETAINED_ROWS' if rows else 'NO_SAVED_ROWS','coverage_verified':False,
                 'coverage_note':'Stored source candles only. Absent partitions are not proof of non-trading days or unavailable provider history; gaps are never filled.'}
 

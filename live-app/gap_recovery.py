@@ -143,7 +143,7 @@ def tick(collector):
     if active>=8:
         return False # Drain first; do not spin if all eight need credentials.
     sources=sorted((j for j in jobs if not j.get('retry_of') and not j.get('system_user_paused') and j['state'] in ('running','completed')),
-        key=lambda j:(0 if j.get('system_role') in ('all_daily','all_intraday','all_rolling') else 1,j['id']))
+        key=lambda j:(0 if j.get('system_role') in ('all_daily','all_intraday','all_rolling','all_daily_earlier') else 1,j['id']))
     if not sources:return False
     position=state.get('position',0)%len(sources);parent=sources[position];jid=parent['id']
     cursors=dict(state.get('cursors',{}));page=collector.results(jid,cursors.get(jid,''))

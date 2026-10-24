@@ -142,6 +142,10 @@ def schedule_history(collector,clock=None):
             'last_schedule_at':clock.isoformat(),'calendar':session(closed)})
     return slots
 
+def refresh_whole_market(collector,clock=None):
+    from whole_market import refresh
+    return refresh(collector,clock)
+
 def recover_core_sessions(collector,clock=None):
     from session_recovery import tick
     return tick(collector,clock)
@@ -380,7 +384,7 @@ async def maintenance(collector,stop):
         except Exception as error:await failed('instrument_discovery',error)
         # History/sweep failures do not stop recording, and discovery failures
         # do not prevent independent daily catch-up from preserving its cursor.
-        for stage,operation in (('backfill_schedule',bootstrap_history),('daily_schedule',schedule_history),('core_session_recovery',recover_core_sessions),
+        for stage,operation in (('backfill_schedule',bootstrap_history),('daily_schedule',schedule_history),('core_session_recovery',recover_core_sessions),('whole_market_scope',refresh_whole_market),
                                 ('quote_schedule',schedule_quotes),('chain_schedule',schedule_chains),('data_audit',audit_snapshot)):
             try:await asyncio.to_thread(operation,collector)
             except asyncio.CancelledError:raise
@@ -467,6 +471,7 @@ def status(store,clock=None):
             'live_capacity':plan.get('live_capacity',10000),'interactive_connection_reserved':plan.get('interactive_connection_reserved',True),'all_market_continuous':False,
             'depth20_unsubscribed':plan.get('depth20_unsubscribed'),'depth20_scope':plan.get('depth20_scope'),
             'session_recovery':store.document('system/session-recovery')[0] or {},
+            'whole_market':store.document('system/whole-market')[0] or {},
             'historical_recovery':(store.document('control/gap-recovery')[0] or {}).get('progress',{}),
             'segment_probe':public_report(store),
             'streams':streams,'maintenance':store.document('system/maintenance')[0] or {},
