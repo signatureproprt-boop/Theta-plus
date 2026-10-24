@@ -37,11 +37,6 @@ jobs:
           workload_identity_provider: ${{ vars.THETA_WIF_PROVIDER }}
           service_account: ${{ vars.THETA_DEPLOY_SERVICE_ACCOUNT }}
       - uses: google-github-actions/setup-gcloud@v3
-      - name: Enable management API needed for approved IAM grant
-        run: gcloud services enable cloudresourcemanager.googleapis.com --project=theta-pluse --quiet
-      - name: Apply approved read-only Scheduler Viewer grant
-        run: |
-          gcloud projects add-iam-policy-binding theta-pluse --member=serviceAccount:theta-plus-github@theta-pluse.iam.gserviceaccount.com --role=roles/cloudscheduler.viewer --condition=None --quiet --format=none
       - name: Verify Scheduler read access propagation
         run: |
           python3 - <<'PY'
