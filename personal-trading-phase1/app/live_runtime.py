@@ -5,11 +5,11 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from redis.exceptions import ResponseError
-from sqlalchemy import select, text
+from sqlalchemy import select, text, func
 from sqlalchemy.dialects.postgresql import insert
 from app.config import settings
 from app.db import engine, session
-from app.models import LiveTick, SystemState, LiveGap, utcnow
+from app.models import LiveTick, LiveCheckpoint, SystemState, LiveGap, utcnow
 from app.market_collection import put_state
 from app.rate_gate import redis_client
 from app.live_feed import DhanLiveClient, SessionStarted, load_watchlist, credentials, credential_revision
@@ -77,6 +77,18 @@ def persist_batch(entries):
             raise RuntimeError('STORAGE_SOFT_LIMIT')
         if rows:
             db.execute(insert(LiveTick).values(rows).on_conflict_do_nothing())
+            checkpoints = {}
+            for row in rows:
+                if row['payload'].get('kind') != 'tick': continue
+                identity = (row['exchange_segment'],row['security_id'])
+                if identity not in checkpoints or row['timestamp'] > checkpoints[identity]['received_at']:
+                    checkpoints[identity] = {'exchange_segment':identity[0],'security_id':identity[1],
+                        'received_at':row['timestamp'],'trade_time':row['trade_time']}
+            if checkpoints:
+                stmt = insert(LiveCheckpoint).values(list(checkpoints.values()))
+                db.execute(stmt.on_conflict_do_update(index_elements=['exchange_segment','security_id'],
+                    set_={'received_at':func.greatest(LiveCheckpoint.received_at,stmt.excluded.received_at),
+                          'trade_time':func.greatest(LiveCheckpoint.trade_time,stmt.excluded.trade_time)}))
             put_state(db, 'live-health', {'state': 'RECEIVING', 'checked_at': utcnow().isoformat(),
                 'last_received_at': rows[-1]['timestamp'].isoformat(), 'batch_rows': len(rows),
                 'freshness_verified': False})
@@ -121,9 +133,30 @@ async def batch_writer(redis):
             raise
         except Exception as exc:
             LOG.warning('LIVE_BATCH_RETRY error_type=%s pending_rows=%d', type(exc).__name__, len(batch))
+            if isinstance(exc, ResponseError) and 'NOGROUP' in str(exc):
+                try:
+                    await asyncio.to_thread(redis.xgroup_create, STREAM, GROUP, id='0', mkstream=True)
+                except ResponseError:
+                    pass
             # A failed ACK can replay committed entries; PK deduplicates.
             batch.clear(); pending = True
             await asyncio.sleep(5)
+
+
+def resume_auth_gaps():
+    with session() as db:
+        for gap in db.scalars(select(LiveGap).where(LiveGap.status == 'AUTH_REQUIRED',
+                LiveGap.attempts < settings().max_fetch_attempts)).all():
+            gap.status, gap.next_attempt_at, gap.last_dispatched_at = 'QUEUED', utcnow(), None
+        db.commit()
+
+
+def recent_trades():
+    from sqlalchemy import func
+    from datetime import timedelta
+    with session() as db:
+        last = db.scalar(select(func.max(LiveCheckpoint.trade_time)))
+        return bool(last and last >= utcnow()-timedelta(minutes=15))
 
 
 async def maintenance():
@@ -136,15 +169,11 @@ async def maintenance():
                 await asyncio.to_thread(process_pending_session, shard)
             revision = credential_revision(await asyncio.to_thread(credentials))
             if revision != last_revision:
-                with session() as db:
-                    for gap in db.scalars(select(LiveGap).where(LiveGap.status == 'AUTH_REQUIRED',
-                            LiveGap.attempts < settings().max_fetch_attempts)).all():
-                        gap.status, gap.next_attempt_at, gap.last_dispatched_at = 'QUEUED', utcnow(), None
-                    db.commit()
+                await asyncio.to_thread(resume_auth_gaps)
                 last_revision = revision
             await asyncio.to_thread(dispatch_gaps)
             # Finalized-minute catch-up covers the settling tail and restarts.
-            if asyncio.get_running_loop().time() >= settled:
+            if asyncio.get_running_loop().time() >= settled and await asyncio.to_thread(recent_trades):
                 watchlist = await asyncio.to_thread(load_watchlist, settings().live_connections*5000)
                 if watchlist:
                     for shard in range(settings().live_connections):

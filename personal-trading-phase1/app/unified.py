@@ -28,7 +28,7 @@ def mount_workspace(app):
     legacy = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(legacy)
     from credentials import CredentialError
-    from provider import ProviderError, DATA_PATHS
+    from provider import ProviderError, DATA_PATHS, quota_family
 
     class FileCredentials:
         pair_secret = 'local-protected-files'
@@ -73,7 +73,8 @@ def mount_workspace(app):
             raise ProviderError('Dhan credentials required', code='DH-901', status=401)
         gate = RateGate(provider.credentials.client_id)
         try:
-            slot = await asyncio.to_thread(gate.acquire)
+            family, spacing = quota_family(path)
+            slot = await asyncio.to_thread(gate.acquire, family, int(spacing*1000))
         except GateDeferred:
             raise ProviderError('Shared account budget is waiting', code='ACCOUNT_GATE', status=429) from None
         started = utcnow()

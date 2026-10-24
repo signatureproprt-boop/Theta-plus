@@ -61,3 +61,27 @@ def test_live_api_auth_still_required_and_browser_socket_rejects_invalid_key(mon
             ws.receive_json()
         assert error.value.code == 1008
     assert client.get('/live/status').status_code in (401,503)
+
+
+def test_known_calendar_does_not_poll_closed_weekend_repeatedly():
+    from app.gaps import calendar_end, expected_minutes
+    from app.dhan import IST
+    saturday = datetime(2026,10,24,15,0,tzinfo=IST)
+    end=calendar_end(saturday,'NSE','EQUITY')
+    assert end == datetime(2026,10,23,15,30,tzinfo=IST)
+    start=datetime(2026,10,23,15,29,tzinfo=IST)
+    assert expected_minutes(start,saturday,'NSE','EQUITY') == {start.astimezone(timezone.utc)}
+    assert calendar_end(saturday,'BSE','EQUITY') == saturday
+    assert expected_minutes(start,saturday,'BSE','EQUITY') is None
+
+
+def test_endpoint_family_spacing_is_account_shared(monkeypatch):
+    import fakeredis
+    from app import rate_gate
+    from app.config import Settings
+    monkeypatch.setattr(rate_gate,'settings',lambda:Settings(dhan_min_spacing_ms=250))
+    redis=fakeredis.FakeRedis()
+    rate_gate.RateGate('same-account',redis).acquire('chain',6000)
+    with pytest.raises(rate_gate.GateDeferred) as error:
+        rate_gate.RateGate('same-account',redis).acquire('chain',6000)
+    assert error.value.seconds >= 5

@@ -13,7 +13,7 @@ from app import dhan
 from app.celery_app import celery_app
 from app.config import settings
 from app.db import engine, session
-from app.models import (LiveGap, LiveTick, HistoricalData, MasterIdentity,
+from app.models import (LiveGap, LiveCheckpoint, HistoricalData, MasterIdentity,
                         Instrument, FetchJob, utcnow)
 from app.policy import retry_delay, validate_identity
 from app.rate_gate import RateGate, GateDeferred
@@ -28,25 +28,57 @@ def finalized_end(now):
     return now.astimezone(timezone.utc).replace(second=0, microsecond=0) - timedelta(minutes=1)
 
 
+def calendar_end(end, exchange, instrument_type):
+    """Only pin session bounds where the calendar/product evidence is available."""
+    from app.calendar_evidence import session as market_session
+    if instrument_type not in ('INDEX','EQUITY','FUTIDX','OPTIDX','FUTSTK','OPTSTK'):
+        return end
+    day = end.astimezone(dhan.IST).date()
+    for _ in range(14):
+        state = market_session(day, exchange)['state']
+        if state not in ('REGULAR','CLOSED'): return end
+        opening = datetime.combine(day,time(9,15),tzinfo=dhan.IST)
+        if state == 'REGULAR' and end > opening:
+            return min(end,datetime.combine(day,time(15,30),tzinfo=dhan.IST)).astimezone(timezone.utc)
+        day -= timedelta(days=1)
+    return end
+
+
+def expected_minutes(start, end, exchange, instrument_type):
+    from app.calendar_evidence import session as market_session
+    if instrument_type not in ('INDEX','EQUITY','FUTIDX','OPTIDX','FUTSTK','OPTSTK'): return None
+    day, final = start.astimezone(dhan.IST).date(), end.astimezone(dhan.IST).date()
+    result=set()
+    while day <= final:
+        state=market_session(day, exchange)['state']
+        if state not in ('REGULAR','CLOSED'): return None
+        if state=='REGULAR':
+            opening=datetime.combine(day,time(9,15),tzinfo=dhan.IST)
+            result.update(stamp for i in range(375) if start <= (stamp := (opening+timedelta(minutes=i)).astimezone(timezone.utc)) < end)
+        day+=timedelta(days=1)
+    return result
+
+
 def plan_session(info):
-    end = finalized_end(info.connected_at)
-    floor = end - timedelta(days=7)
+    session_end = finalized_end(info.connected_at)
     planned = 0
     with session() as db:
         for seg, sid in info.instruments:
             if db.scalar(select(LiveGap.id).where(LiveGap.exchange_segment == seg,
-                    LiveGap.security_id == sid, LiveGap.status.in_(ACTIVE)).limit(1)):
+                    LiveGap.security_id == sid, LiveGap.status.in_((*ACTIVE,'AUTH_REQUIRED','NEEDS_MAPPING','REVIEW_REQUIRED'))).limit(1)):
                 continue
             item, meta = db.get(Instrument, (seg, sid)), db.get(MasterIdentity, (seg, sid))
             if not item or not item.mapping_verified or not meta or meta.blocked:
                 continue
             validate_identity(seg, item.instrument_type)
+            end = calendar_end(session_end, meta.exchange, item.instrument_type)
+            floor = end - timedelta(days=7)
             # Durable last receipt plus saved candle tail, not process-local clocks.
-            tick = db.scalar(select(func.max(LiveTick.timestamp)).where(
-                LiveTick.exchange_segment == seg, LiveTick.security_id == sid))
-            candle = db.scalar(select(func.max(HistoricalData.timestamp)).where(
+            checkpoint = db.get(LiveCheckpoint,(seg,sid))
+            tick = checkpoint.received_at if checkpoint else None
+            candle = db.scalar(select(HistoricalData.timestamp).where(
                 HistoricalData.exchange_segment == seg, HistoricalData.security_id == sid,
-                HistoricalData.interval == '1', HistoricalData.timestamp < end))
+                HistoricalData.interval == '1', HistoricalData.timestamp < end).order_by(HistoricalData.timestamp.desc()).limit(1))
             candidates = [v for v in (tick, candle, info.disconnected_at) if v is not None]
             start = min(candidates) if candidates else datetime.combine(
                 (end.astimezone(dhan.IST) - timedelta(days=1)).date(), time(9, 15), tzinfo=dhan.IST)
@@ -133,6 +165,7 @@ def process_gap(gap_id):
                     'account_key': getattr(gate, 'account_key', None)}
                 gap.evidence = [*gap.evidence, receipt]
                 db.commit()  # Durable evidence before request; crash consumes an attempt.
+                receipt = dict(receipt)  # Never mutate the nested JSON object already tracked by SQLAlchemy.
                 try:
                     result = dhan.fetch(endpoint, payload, start_day, end_day)
                 except dhan.CredentialsMissing:
@@ -152,6 +185,19 @@ def process_gap(gap_id):
                     added, conflicts = save_rows(db, job, rows)
                     gap.status = 'REVIEW_REQUIRED' if conflicts else 'ROWS_RECEIVED'
                     receipt.update(inserted_rows=added, conflicting_rows=conflicts)
+                    expected = expected_minutes(gap.start, gap.end, meta.exchange, item.instrument_type)
+                    if expected is not None and not conflicts:
+                        saved = set(db.scalars(select(HistoricalData.timestamp).where(
+                            HistoricalData.exchange_segment == gap.exchange_segment, HistoricalData.security_id == gap.security_id,
+                            HistoricalData.interval == '1', HistoricalData.timestamp >= gap.start, HistoricalData.timestamp < gap.end)))
+                        missing = len(expected-saved)
+                        receipt.update(expected_minutes=len(expected), missing_minutes=missing)
+                        if missing:
+                            outcome = 'PARTIAL_MINUTE_COVERAGE'
+                            if gap.attempts < settings().max_fetch_attempts:
+                                delay=retry_delay(gap.attempts,settings().backoff_base_seconds,settings().backoff_cap_seconds)
+                                gap.status,gap.next_attempt_at='RETRY_WAIT',utcnow()+timedelta(seconds=delay)
+                            else:gap.status='REVIEW_REQUIRED'
                 elif result.outcome == 'AUTH_REQUIRED':
                     gap.status = 'AUTH_REQUIRED'
                 elif (result.retryable or result.rows) and gap.attempts < settings().max_fetch_attempts:

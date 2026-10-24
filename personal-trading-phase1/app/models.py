@@ -198,3 +198,12 @@ class LiveGap(Base):
                          ['instruments.exchange_segment', 'instruments.security_id']),
                      CheckConstraint('"end" > start'),
                      UniqueConstraint('exchange_segment', 'security_id', 'start', 'end'))
+
+
+class LiveCheckpoint(Base):
+    """Advanced in the same commit as tick batches; restart cursor, not coverage."""
+    __tablename__ = 'live_checkpoints'
+    exchange_segment: Mapped[str] = mapped_column(String(24), primary_key=True)
+    security_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    trade_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
