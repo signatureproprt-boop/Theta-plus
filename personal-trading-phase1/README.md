@@ -295,6 +295,56 @@ Minute backfill cannot reconstruct every missed live tick. The existing Theta
 Plus restart evidence and scheduled market check do not certify this new system.
 The Phase 1 bundle does not change that existing schedule.
 
+## NSE/BSE background collection
+
+The VM override now enables `COLLECT_NSE_BSE` and `PARALLEL_BUDGET_REQUIRED`.
+Local Compose keeps automatic collection off by default. The dispatcher downloads
+and pins the official Dhan detailed CSV daily, retains the compressed source and
+imports supported NSE/BSE cash, indices, derivatives and currency identities.
+All MCX and raw commodity-segment rows are excluded from mapping and collection.
+Existing instruments, candles, job attempts and review findings are retained.
+Reused derivative security IDs are blocked for review rather than silently
+relabeling stored candles. The worker fences identity changes again before saving.
+
+Daily and one-minute history frontiers are created in bounded batches. A recent
+probe precedes older adjacent windows (daily up to 90 days, minute up to seven).
+Daily requests have a 1900 lower requested boundary, **not an availability claim**;
+minute requests use the active-contract scope and moving five-year provider
+horizon. An unchanged empty/rejected window remains a failed review item; it does
+not advance the frontier or invalidate/delist an instrument. Recent catch-up has
+priority over older slices for that instrument; new frontiers get fair turns.
+At most 500 active jobs are planned by default. The master can contain expired
+contracts and instruments without historical availability; discovery isn't coverage.
+
+Token changes resume only bounded `AUTH_REQUIRED` jobs with attempts remaining,
+preserving their attempt history. A database-size soft guard of 20 GiB stops new
+planning and defers requests; it is not a host-disk or WAL-space guarantee. Full
+market archives may require substantially more storage. No volume is expanded
+and no data is deleted automatically.
+
+The existing Theta Plus collector reserves 50,000 attempts per IST day with at
+least 0.5 seconds between starts. This VM reserves at most 40,000 starts per rolling
+24 hours and at least 1.1 seconds between starts. Before automatic calls it checks
+the legacy budget endpoint and matching activated worker release; unreadable or
+incompatible state defers new requests. These allowances coordinate these two
+installations only; other software using the account and the provider's precise
+day-reset semantics remain outside this evidence. Real 429/DH-904/805 observations
+still trigger explicit cooldown; DH-907 never becomes rate-limit evidence.
+
+Inspect `/market/status` with the application API key, or from Cloud Shell:
+
+```bash
+gcloud compute ssh personal-trading-phase1 --project=theta-pluse --zone=asia-south1-a --tunnel-through-iap --command="sudo docker exec personal-trading-phase1-api-1 python -m app.verify_phase1 market-status"
+```
+
+This shows the pinned catalogue, planner state, durable job/progress counts and
+database size. `/market/coverage` accepts `exchange_segment`, `security_id`,
+`interval`, `start`, and exclusive `end` for at most 31 days. It reports saved rows
+per IST day. NSE cash/index/F&O regular-session evidence is pinned for 2026; other
+exchange/year calendars stay unverified. A session grid must contain the correct
+timestamps, not just a count of 375. This does not certify missing live ticks.
+The live WebSocket recorder and full-market coverage remain separate work.
+
 ## Official references checked 24 October 2026
 
 - Dhan historical request schemas and horizons: https://dhanhq.co/docs/v2/historical-data/

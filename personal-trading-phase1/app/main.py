@@ -9,7 +9,7 @@ from sqlalchemy.dialects.postgresql import insert
 from app import dhan
 from app.config import read_secret, settings
 from app.db import session
-from app.models import FetchJob, Instrument, RequestAttempt, utcnow
+from app.models import FetchJob, Instrument, RequestAttempt, utcnow, SystemState, HistoryProgress, MasterIdentity, HistoricalData
 from app.policy import INTERVALS, validate_identity, windows
 from app.rate_gate import redis_client
 
@@ -174,3 +174,64 @@ def error_summary():
             RequestAttempt, RequestAttempt.job_id == FetchJob.id).group_by(*columns)).mappings().all()
         return {'groups': [dict(r) for r in rows],
                 'basis': 'HTTP attempts; not unique instrument/date coverage'}
+
+
+@app.get('/market/status', dependencies=protected)
+def market_status():
+    with session() as db:
+        states = {}
+        for key in ('nse-bse-master', 'nse-bse-collection', 'nse-bse-maintenance-error'):
+            state = db.get(SystemState, key)
+            states[key] = state.data if state else {'state': 'NOT_CHECKED'}
+        states['jobs'] = dict(db.execute(select(FetchJob.status, func.count()).group_by(FetchJob.status)).all())
+        states['progress'] = dict(db.execute(select(HistoryProgress.state, func.count()).group_by(HistoryProgress.state)).all())
+        states['database_bytes'] = db.scalar(text('SELECT pg_database_size(current_database())'))
+        states['database_soft_limit_bytes'] = settings().history_database_soft_gib * 1024 ** 3
+        states['coverage_verified'] = False
+        return states
+
+
+@app.get('/market/coverage', dependencies=protected)
+def market_coverage(exchange_segment: str, security_id: str, start: date, end: date,
+                    interval: Literal['1d', '1'] = '1'):
+    if not start < end <= utcnow().astimezone(dhan.IST).date() or (end-start).days > 31:
+        raise HTTPException(422, 'Require a completed date range of at most 31 days; end exclusive')
+    from app.calendar_evidence import session as market_session
+    from datetime import datetime, time
+    with session() as db:
+        item = db.get(MasterIdentity, (exchange_segment, security_id))
+        exchange = item.exchange if item and exchange_segment in ('NSE_EQ', 'BSE_EQ', 'NSE_FNO', 'BSE_FNO', 'IDX_I') else 'UNKNOWN'
+        begin = datetime.combine(start, time(), tzinfo=dhan.IST)
+        finish = datetime.combine(end, time(), tzinfo=dhan.IST)
+        stamps = db.scalars(select(HistoricalData.timestamp).where(
+            HistoricalData.exchange_segment == exchange_segment, HistoricalData.security_id == security_id,
+            HistoricalData.interval == interval, HistoricalData.timestamp >= begin, HistoricalData.timestamp < finish)).all()
+        days = {}
+        for stamp in stamps:
+            local = stamp.astimezone(dhan.IST)
+            days.setdefault(local.date(), []).append(local)
+        result = []
+        day = start
+        while day < end:
+            rows = days.get(day, [])
+            calendar = market_session(day, exchange)
+            expected = None
+            missing = None
+            complete = False
+            outside = None
+            if calendar['state'] == 'REGULAR':
+                if interval == '1d':
+                    expected, missing = 1, max(0, 1-len(rows))
+                    complete = len(rows) == 1
+                else:
+                    grid = {9*60+15+i for i in range(375)}
+                    observed = {s.hour*60+s.minute for s in rows if s.second == 0 and s.microsecond == 0 and s.hour*60+s.minute in grid}
+                    outside = len(rows)-len(observed)
+                    expected, missing = 375, len(grid-observed)
+                    complete = missing == 0 and outside == 0
+            result.append({'day': day.isoformat(), 'received_rows': len(rows), 'calendar': calendar,
+                           'expected_rows': expected, 'missing_rows': missing, 'off_grid_rows': outside,
+                           'saved_session_grid_complete': complete})
+            day += timedelta(days=1)
+        return {'days': result, 'scope': 'Saved candles for this exact identity and interval; empty results do not prove unavailability',
+                'coverage_verified': False}

@@ -5,6 +5,7 @@ TYPES = {
     'IDX_I': {'INDEX'}, 'NSE_EQ': {'EQUITY'}, 'BSE_EQ': {'EQUITY'},
     'NSE_FNO': {'FUTIDX', 'FUTSTK', 'OPTIDX', 'OPTSTK'},
     'BSE_FNO': {'FUTIDX', 'FUTSTK', 'OPTIDX', 'OPTSTK'},
+    'NSE_CURRENCY': {'FUTCUR', 'OPTCUR'}, 'BSE_CURRENCY': {'FUTCUR', 'OPTCUR'},
 }
 INTERVALS = {'1d', '1', '5', '15', '25', '60'}
 

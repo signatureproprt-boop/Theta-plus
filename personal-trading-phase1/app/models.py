@@ -4,8 +4,8 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from sqlalchemy import (BigInteger, Boolean, CheckConstraint, Date, DateTime,
                         ForeignKey, ForeignKeyConstraint, Index, Integer,
-                        Numeric, String, UniqueConstraint)
-from sqlalchemy.dialects.postgresql import UUID
+                        Numeric, String, UniqueConstraint, LargeBinary)
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -117,3 +117,45 @@ class RequestAttempt(Base):
     response_rows: Mapped[int] = mapped_column(Integer, default=0)
     __table_args__ = (UniqueConstraint('job_id', 'attempt'),
                       Index('ix_attempt_account_started', 'account_key', 'started_at'))
+
+
+class SystemState(Base):
+    __tablename__ = 'system_state'
+    key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    data: Mapped[dict] = mapped_column(JSONB, nullable=False)
+
+
+class MasterSnapshot(Base):
+    __tablename__ = 'master_snapshots'
+    sha256: Mapped[str] = mapped_column(String(64), primary_key=True)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    compressed_csv: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    summary: Mapped[dict] = mapped_column(JSONB, nullable=False)
+
+
+class MasterIdentity(Base):
+    __tablename__ = 'master_identities'
+    exchange_segment: Mapped[str] = mapped_column(String(24), primary_key=True)
+    security_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    exchange: Mapped[str] = mapped_column(String(4), nullable=False)
+    source_sha: Mapped[str] = mapped_column(String(64), ForeignKey('master_snapshots.sha256'), index=True)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    expiry: Mapped[date | None] = mapped_column(Date)
+    blocked: Mapped[bool] = mapped_column(Boolean, default=False)
+    __table_args__ = (ForeignKeyConstraint(['exchange_segment', 'security_id'],
+                         ['instruments.exchange_segment', 'instruments.security_id']),)
+
+
+class HistoryProgress(Base):
+    __tablename__ = 'history_progress'
+    exchange_segment: Mapped[str] = mapped_column(String(24), primary_key=True)
+    security_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    interval: Mapped[str] = mapped_column(String(3), primary_key=True)
+    floor: Mapped[date] = mapped_column(Date, nullable=False)
+    older_to: Mapped[date] = mapped_column(Date, nullable=False)
+    recent_end: Mapped[date | None] = mapped_column(Date)
+    pending_job_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey('fetch_jobs.id'))
+    state: Mapped[str] = mapped_column(String(32), default='READY', index=True)
+    planned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime(1970, 1, 1, tzinfo=timezone.utc), index=True)
+    __table_args__ = (ForeignKeyConstraint(['exchange_segment', 'security_id'],
+                         ['instruments.exchange_segment', 'instruments.security_id']),)

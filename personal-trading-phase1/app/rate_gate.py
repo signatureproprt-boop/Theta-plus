@@ -57,11 +57,16 @@ class RateGate:
 
     def acquire(self):
         s = settings()
+        if s.parallel_budget_required:
+            from app.parallel_budget import ready
+            if not ready():
+                raise GateDeferred(60)
         waited = 0
         while True:
             wait, previous, recent = self.redis.eval(
                 LUA, 3, self.prefix + ':day', self.prefix + ':last', self.prefix + ':cooldown',
-                s.dhan_min_spacing_ms, s.dhan_daily_guard, uuid.uuid4().hex)
+                max(s.dhan_min_spacing_ms, 1100) if s.parallel_budget_required else s.dhan_min_spacing_ms,
+                min(s.dhan_daily_guard, 40000) if s.parallel_budget_required else s.dhan_daily_guard, uuid.uuid4().hex)
             if not wait:
                 return Slot(waited, None if previous < 0 else previous, recent)
             if wait > 5000:

@@ -19,22 +19,22 @@ def setup(tmp_path,monkeypatch):
 def test_history_start_rate_is_shared_and_waits_do_not_consume_budget(setup):
     clock,s,a,b=setup;starts=[]
     for n in range(12):
-        clock[0]=1000+n*.25
+        clock[0]=1000+n*.5
         assert (a if n%2 else b).reserve('charts/intraday')['granted']
         starts.append(clock[0])
         denied=b.reserve('charts/historical')
-        assert not denied['granted'] and denied['at']==clock[0]+.25
+        assert not denied['granted'] and denied['at']==clock[0]+.5
         assert s.document('control/provider-budget')[0]['calls']==n+1
-    assert all(sum(t<=v<t+1 for v in starts)<=4 for t in starts)
+    assert all(sum(t<=v<t+1 for v in starts)<=2 for t in starts)
 
 
 def test_quote_chain_and_history_use_distinct_intervals(setup):
     clock,s,a,b=setup
     assert a.reserve('optionchain')['granted']
-    clock[0]+=.25;assert b.reserve('charts/rollingoption')['granted']
-    clock[0]+=.25;assert b.reserve('marketfeed/quote')['granted']
-    clock[0]+=.25
-    assert a.reserve('marketfeed/ltp')=={'granted':False,'at':1001.6}
+    clock[0]+=.5;assert b.reserve('charts/rollingoption')['granted']
+    clock[0]+=.5;assert b.reserve('marketfeed/quote')['granted']
+    clock[0]+=.5
+    assert a.reserve('marketfeed/ltp')=={'granted':False,'at':1002.1}
     assert a.reserve('optionchain/expirylist')=={'granted':False,'at':1003.2}
     assert a.reserve('charts/historical')['granted']
     assert s.document('control/provider-budget')[0]['calls']==4
@@ -51,12 +51,12 @@ def test_only_one_cross_instance_contender_gets_a_start(setup):
 def test_legacy_reservation_and_daily_budget_survive_upgrade(setup):
     clock,s,a,b=setup
     day=datetime.now(IST).date().isoformat()
-    s.put_document('control/provider-budget',{'day':day,'calls':99999,'next_at':1003.2},0)
+    s.put_document('control/provider-budget',{'day':day,'calls':49999,'next_at':1003.2},0)
     assert not a.reserve('charts/historical')['granted']
-    assert s.document('control/provider-budget')[0]['calls']==99999
+    assert s.document('control/provider-budget')[0]['calls']==49999
     clock[0]=1003.2;assert b.reserve('charts/intraday')['granted']
     with pytest.raises(ProviderError) as error:a.reserve('marketfeed/quote')
-    assert error.value.code=='BUDGET' and s.document('control/provider-budget')[0]['calls']==100000
+    assert error.value.code=='BUDGET' and s.document('control/provider-budget')[0]['calls']==50000
 
 
 def test_day_rollover_resets_count_but_not_active_spacing(setup):
@@ -107,7 +107,7 @@ def test_only_provider_throttling_installs_global_backoff(setup,monkeypatch,stat
 def test_old_worker_cannot_bypass_new_chain_spacing_during_rollout(setup):
     clock,s,a,b=setup
     assert a.reserve('optionchain')['granted']
-    clock[0]+=.25;assert b.reserve('charts/historical')['granted']
+    clock[0]+=.5;assert b.reserve('charts/historical')['granted']
     state,version=s.document('control/provider-budget')
     # An older image knows only next_at and schedules its call after that gate.
     legacy_at=max(clock[0],state['next_at'])
@@ -126,4 +126,24 @@ def test_public_pacing_status_exposes_counts_without_private_ledger_fields(setup
     s.put_document('control/provider-budget',{**state,'private_value':'must-not-appear'},version)
     report=status(s)['request_pacing']
     assert report['policy']=='endpoint-starts-v1' and report['attempts_reserved']==1
-    assert report['daily_guard']==100000 and 'private_value' not in report
+    assert report['daily_guard']==50000 and 'private_value' not in report
+
+
+def test_new_parallel_guard_does_not_reset_existing_account_usage(setup):
+    clock,s,a,b=setup
+    s.put_document('control/provider-budget',{'day':datetime.now(IST).date().isoformat(),'calls':60000},0)
+    with pytest.raises(ProviderError):
+        a.reserve('charts/historical')
+    assert s.document('control/provider-budget')[0]['calls']==60000
+
+
+def test_account_budget_endpoint_only_approves_the_activated_worker(tmp_path):
+    from fastapi.testclient import TestClient
+    from server import create_app
+    from build_identity import runtime_build
+    app=create_app(tmp_path/'account.db')
+    with TestClient(app) as client:
+        report=client.get('/api/collection/account-budget').json()
+        assert report['legacy_daily_guard']==50000 and not report['worker_release_matches']
+        app.state.store.put_document('control/worker',{'build_id':runtime_build()},0)
+        assert client.get('/api/collection/account-budget').json()['worker_release_matches'] is True

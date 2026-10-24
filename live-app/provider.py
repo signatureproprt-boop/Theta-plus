@@ -10,6 +10,8 @@ from dhanhq import DhanContext, dhanhq
 from credentials import DhanCredentials, CredentialError
 
 SDK_VERSION = version('dhanhq')
+PARALLEL_DAILY_GUARD = 50000
+PARALLEL_GLOBAL_SPACING = 0.5
 DATA_PATHS = {'charts/historical', 'charts/intraday', 'charts/rollingoption',
               'optionchain', 'optionchain/expirylist', 'marketfeed/ltp',
               'marketfeed/ohlc', 'marketfeed/quote'}
@@ -101,7 +103,7 @@ class Dhan:
         reservation={};today=datetime.now(IST).date().isoformat();family,spacing=quota_family(path)
         def change(old):
             old=old or {};calls=old.get('calls',0) if old.get('day')==today else 0
-            if calls>=100000:raise ProviderError('Daily market-data request budget reached',code='BUDGET',status=429)
+            if calls>=PARALLEL_DAILY_GUARD:raise ProviderError('Daily market-data request budget reached',code='BUDGET',status=429)
             ts=time.time();families=dict(old.get('family_next_at') or {})
             global_at=old.get('global_next_at',0) if old.get('policy')=='endpoint-starts-v1' else old.get('next_at',0)
             at=max(ts,global_at,families.get(family,0),old.get('cooldown_until',0))
@@ -111,7 +113,7 @@ class Dhan:
             # Keep a conservative next_at for an older worker during rollout.
             # Modern callers use global_next_at plus family-specific spacing.
             return {**old,'day':today,'calls':calls+1,
-                    'next_at':max(old.get('next_at',0),ts+spacing),'global_next_at':ts+0.25,
+                    'next_at':max(old.get('next_at',0),ts+spacing),'global_next_at':ts+PARALLEL_GLOBAL_SPACING,
                     'family_next_at':families,'policy':'endpoint-starts-v1'}
         replace(self.store,'control/provider-budget',change)
         return reservation

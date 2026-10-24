@@ -8,9 +8,14 @@ services:
       - /srv/personal-trading/data/redis:/data
   api:
     image: ${PHASE1_APP_IMAGE:?Set verified release image}
+    environment: &collection_environment
+      COLLECT_NSE_BSE: "true"
+      PARALLEL_BUDGET_REQUIRED: "true"
   worker:
     image: ${PHASE1_APP_IMAGE:?Set verified release image}
+    environment: *collection_environment
   dispatcher:
     image: ${PHASE1_APP_IMAGE:?Set verified release image}
+    environment: *collection_environment
   migrate:
     image: ${PHASE1_APP_IMAGE:?Set verified release image}

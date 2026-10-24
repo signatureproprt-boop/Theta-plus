@@ -293,6 +293,17 @@ def create_app(db_path=None):
         from data_system import status
         return status(store)
 
+    @app.get('/api/collection/account-budget')
+    def account_budget_status():
+        from provider import PARALLEL_DAILY_GUARD,PARALLEL_GLOBAL_SPACING
+        from build_identity import runtime_build
+        worker=store.document('control/worker')[0] or {}
+        budget=store.document('control/provider-budget')[0] or {}
+        return {'coordination':'parallel-collectors-v1','legacy_daily_guard':PARALLEL_DAILY_GUARD,
+                'legacy_global_spacing_seconds':PARALLEL_GLOBAL_SPACING,
+                'worker_release_matches':worker.get('build_id')==runtime_build(),
+                'legacy_attempts_reserved':budget.get('calls',0),'legacy_day_ist':budget.get('day')}
+
     @app.post('/api/system-doctor/status')
     def system_doctor_status(request:Request):
         require_admin(request)

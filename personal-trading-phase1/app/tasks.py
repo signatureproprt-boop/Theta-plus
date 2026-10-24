@@ -13,7 +13,7 @@ from app import dhan
 from app.celery_app import celery_app
 from app.config import settings
 from app.db import engine
-from app.models import FetchJob, HistoricalData, Instrument, RequestAttempt, utcnow
+from app.models import FetchJob, HistoricalData, Instrument, RequestAttempt, utcnow, MasterIdentity
 from app.policy import retry_delay, validate_identity
 from app.rate_gate import GateDeferred, RateGate
 
@@ -90,6 +90,11 @@ def process_job(job_id):
                     db.commit()
                     return None
                 gate = RateGate(client_id)
+                if db.scalar(text('SELECT pg_database_size(current_database())')) >= settings().history_database_soft_gib * 1024 ** 3:
+                    job.status, job.failure_reason = 'RETRY_WAIT', 'STORAGE_SOFT_LIMIT'
+                    job.next_attempt_at = utcnow() + timedelta(minutes=10)
+                    db.commit()
+                    return 600
                 try:
                     slot = gate.acquire()  # Redis failure means no HTTP call.
                 except GateDeferred as exc:
@@ -98,6 +103,8 @@ def process_job(job_id):
                     db.commit()
                     return exc.seconds
                 endpoint, payload = dhan.endpoint_and_payload(job, instrument)
+                metadata_before = db.get(MasterIdentity, (job.exchange_segment, job.security_id))
+                fingerprint_before = metadata_before.fingerprint if metadata_before else None
                 # A previous process may have died mid-request. Keep that evidence.
                 db.execute(update(RequestAttempt).where(
                     RequestAttempt.job_id == jid, RequestAttempt.outcome == 'STARTED'
@@ -115,13 +122,27 @@ def process_job(job_id):
                     result = dhan.fetch(endpoint, payload, job.start_date, job.end_date)
                 except dhan.CredentialsMissing:
                     result = dhan.FetchResult('AUTH_REQUIRED')
+                received = len(result.rows)
+                # Recheck under shared row locks before saving: a concurrent
+                # master refresh must not reinterpret a reused derivative ID.
+                instrument = db.scalar(select(Instrument).where(
+                    Instrument.exchange_segment == job.exchange_segment,
+                    Instrument.security_id == job.security_id).with_for_update()
+                    .execution_options(populate_existing=True))
+                metadata_after = db.scalar(select(MasterIdentity).where(
+                    MasterIdentity.exchange_segment == job.exchange_segment,
+                    MasterIdentity.security_id == job.security_id).with_for_update(read=True)
+                    .execution_options(populate_existing=True))
+                if (not instrument.mapping_verified or (metadata_after and metadata_after.blocked) or
+                        (fingerprint_before and (not metadata_after or metadata_after.fingerprint != fingerprint_before))):
+                    result.rows, result.outcome, result.retryable = [], 'IDENTITY_CHANGED_DURING_REQUEST', False
                 attempt.finished_at = utcnow()
                 attempt.http_started_at = result.http_started_at
                 attempt.duration_ms = result.duration_ms
                 attempt.http_status, attempt.provider_code = result.http_status, result.code
                 attempt.outcome, attempt.rate_limit_evidence = result.outcome, result.rate_evidence
                 attempt.retry_after_seconds = result.retry_after
-                attempt.response_sha256, attempt.response_rows = result.response_hash, len(result.rows)
+                attempt.response_sha256, attempt.response_rows = result.response_hash, received
                 delay = None
                 if result.rows:
                     added, conflicts = save_rows(db, job, result.rows)

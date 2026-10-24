@@ -30,7 +30,7 @@ def stack():
         if Path('/run/secrets/' + name).read_text().strip():
             raise SystemExit('CI fixtures refuse to run with real Dhan credentials')
     import httpx
-    from sqlalchemy import select, text
+    from sqlalchemy import select, text, func
     from app.db import session
     from app.models import FetchJob, HistoricalData
     from app.rate_gate import redis_client
@@ -97,6 +97,27 @@ def stack():
         commodity = {**fixture, 'exchange_segment': 'MCX_COMM', 'instrument_type': 'FUTCOM'}
         assert http.post('/instruments', json=commodity).status_code == 422
         print('STACK_TIMESCALE_INSERT_DEDUP_CONFLICT_AND_MCX_HOLD_VERIFIED', flush=True)
+        # Additive catalogue tables and cursor planning on real PostgreSQL.
+        import csv, io
+        from app.market_collection import import_master, seed_progress
+        from app.models import MasterIdentity, HistoryProgress, Instrument
+        columns = ['EXCH_ID', 'SEGMENT', 'SECURITY_ID', 'INSTRUMENT', 'SYMBOL_NAME', 'SM_EXPIRY_DATE']
+        fixture_rows = [dict(zip(columns, ['NSE', 'D', str(900000000000 + i), 'FUTSTK', 'CI_FUT_' + str(i), '2026-12-29'])) for i in range(1000)]
+        def encode(rows):
+            output = io.StringIO(); writer = csv.DictWriter(output, fieldnames=columns)
+            writer.writeheader(); writer.writerows(rows); return output.getvalue().encode()
+        with session() as db:
+            snapshot = import_master(db, encode(fixture_rows), datetime.now(timezone.utc))
+            seed_progress(db, snapshot['sha256'], __import__('datetime').date(2026, 10, 24))
+            assert db.scalar(select(func.count()).select_from(HistoryProgress)) == 2000
+            fixture_rows[0]['SYMBOL_NAME'] = 'CHANGED_CONTRACT'
+            changed = import_master(db, encode(fixture_rows), datetime.now(timezone.utc))
+            assert changed['identity_conflicts'] == 1
+            first = db.get(Instrument, ('NSE_FNO', '900000000000'))
+            assert first.mapping_verified is False and first.review_reason == 'MASTER_IDENTITY_CHANGED'
+            assert first.symbol == 'CI_FUT_0'
+            db.rollback()
+        print('STACK_MASTER_IMPORT_IDENTITY_REUSE_GUARD_AND_PROGRESS_VERIFIED', flush=True)
 
 
 if __name__ == '__main__':

@@ -30,7 +30,24 @@ def dispatch_once():
 
 def main():
     logging.basicConfig(level=logging.INFO)
+    next_maintenance = 0
     while True:
+        if time.monotonic() >= next_maintenance:
+            try:
+                from app.market_collection import maintain
+                maintain()
+            except Exception as exc:
+                log.warning('NSE_BSE_MAINTENANCE_REVIEW %s', type(exc).__name__)
+                try:
+                    from app.market_collection import put_state
+                    with session() as db:
+                        put_state(db, 'nse-bse-maintenance-error', {'state': 'REVIEW_REQUIRED',
+                            'checked_at': utcnow().isoformat(), 'error_type': type(exc).__name__,
+                            'http_status': getattr(getattr(exc, 'response', None), 'status_code', None)})
+                        db.commit()
+                except Exception:
+                    pass
+            next_maintenance = time.monotonic() + 60
         try:
             count = dispatch_once()
             if count:

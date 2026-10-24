@@ -435,6 +435,7 @@ async def supervise(collector,stop):
         for family in RECORDER_STREAMS:group.create_task(guarded(family))
 
 def status(store,clock=None):
+    from provider import PARALLEL_DAILY_GUARD
     from build_identity import runtime_build
     from segment_probe import public_report
     clock=clock or now();config=store.document(CONTROL)[0] or {};plan=store.document(SCOPE)[0] or {}
@@ -473,7 +474,7 @@ def status(store,clock=None):
             'worker_build_matches':worker.get('build_id')==runtime_build(),
             'request_pacing':{'policy':budget.get('policy','legacy-shared'),
                               'day':budget.get('day'),'attempts_reserved':budget.get('calls',0),
-                              'daily_guard':100000,'cooldown_until':budget.get('cooldown_until')},
+                              'daily_guard':PARALLEL_DAILY_GUARD,'cooldown_until':budget.get('cooldown_until')},
             'doctor_progress':doctor_progress,
             'subscribed':{k:len(v) for k,v in plan.get('scopes',{}).items()},
             'live_capacity_excluded':plan.get('live_capacity_excluded'),'live_candidate_count':plan.get('live_candidate_count'),

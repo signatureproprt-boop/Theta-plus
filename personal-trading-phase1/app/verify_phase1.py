@@ -55,6 +55,7 @@ def main(argv=None):
     commands = parser.add_subparsers(dest='command', required=True)
     commands.add_parser('auth')
     commands.add_parser('summary')
+    commands.add_parser('market-status')
     job = commands.add_parser('job')
     job.add_argument('job_id')
     job.add_argument('--timeout', type=int, default=300)
@@ -87,6 +88,9 @@ def main(argv=None):
             return 0 if passed else 2
         if args.command == 'summary':
             show(request(client, 'GET', '/history/error-summary'))
+            return 0
+        if args.command == 'market-status':
+            show(request(client, 'GET', '/market/status'))
             return 0
         if args.command == 'job':
             return 0 if watch(client, args.job_id, args.timeout) else 2
