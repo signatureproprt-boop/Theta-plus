@@ -30,3 +30,15 @@ def test_private_api_bind_has_no_public_default():
     root=Path(__file__).parents[1]
     vps=yaml.safe_load((root/'compose.vps.yaml').read_text())
     assert vps['services']['api']['ports']==['${THETA_PRIVATE_IP:-127.0.0.1}:8000:8000']
+
+
+def test_missing_fence_is_distinct_from_permission_failure(monkeypatch):
+    from types import SimpleNamespace
+    spec=importlib.util.spec_from_file_location('owner_merge',Path(__file__).parents[1]/'deploy/merge_cloudshell.py')
+    owner=importlib.util.module_from_spec(spec);spec.loader.exec_module(owner)
+    monkeypatch.setattr(owner.subprocess,'run',lambda *a,**kw:SimpleNamespace(returncode=1,
+        stderr='One or more URLs matched no objects.',stdout=''))
+    assert owner.current_fence()==({},'0')
+    monkeypatch.setattr(owner.subprocess,'run',lambda *a,**kw:SimpleNamespace(returncode=1,
+        stderr='403 permission denied (or it does not exist)',stdout=''))
+    with pytest.raises(RuntimeError,match='CANNOT_READ'):owner.current_fence()

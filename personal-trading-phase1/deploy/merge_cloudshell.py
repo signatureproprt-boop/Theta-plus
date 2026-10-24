@@ -49,7 +49,9 @@ def current_fence():
     result = subprocess.run(['gcloud', 'storage', 'objects', 'describe', FENCE,
         '--project='+PROJECT, '--format=json'], text=True, capture_output=True)
     if result.returncode:
-        if re.search(r'404|not found|does not exist|No URLs matched', result.stderr, re.I):
+        if re.search(r'403|permission.denied|PERMISSION_DENIED', result.stderr, re.I):
+            raise RuntimeError('CANNOT_READ_MIGRATION_FENCE; check bucket permissions')
+        if re.search(r'404|not found|does not exist|No URLs matched|matched no objects', result.stderr, re.I):
             return {}, '0'
         raise RuntimeError('CANNOT_READ_MIGRATION_FENCE; check bucket permissions')
     metadata = json.loads(result.stdout)
