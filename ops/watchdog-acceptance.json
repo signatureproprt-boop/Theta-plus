@@ -1,0 +1,41 @@
+{
+  "id": 1792843896573000,
+  "created_at": "2026-10-24T12:11:36.573609+00:00",
+  "data": {
+    "reported_configured": true,
+    "verified": true,
+    "basis": "natural-scheduler-restart-v1",
+    "schedule": "*/5 * * * *",
+    "worker": "projects/theta-pluse/locations/asia-south1/jobs/theta-plus-collector",
+    "checked_at": "2026-10-24T12:11:36.573609+00:00",
+    "restart_observed": true,
+    "checkpoint_verified": true,
+    "checkpoints_checked": 5,
+    "checkpoint_job_ids": [
+      "017da95145a744058f217e2382631726",
+      "27dab68c65534619993bb4a958c3f4ca",
+      "eac4fdbbf9f64abcae230a213077c72d",
+      "4dc5fd6e35274c8a57e0bc67ef20861e",
+      "695db7aec81b38bba21df2466028c2f9"
+    ],
+    "previous_executions": [
+      "theta-plus-collector-694sz"
+    ],
+    "replacement_executions": [
+      "theta-plus-collector-brj9n"
+    ],
+    "scheduler": "theta-plus-data-watchdog",
+    "verification_evidence": {
+      "workflow_run_id": 40091968830,
+      "workflow_job_id": 120866941550,
+      "source_commit": "9d4f1c1e961b8a69cc97796b7053f62d152b0fb9",
+      "original_workflow_conclusion": "failure",
+      "failure_stage": "persist_verified_report",
+      "verified_branch_log_timestamp": "2026-10-24T12:05:59.2369258Z",
+      "controlled_stop_log_timestamp": "2026-10-24T12:01:41.6981234Z",
+      "replacement_heartbeat_observed_at": "2026-10-24T12:06:02.676188+00:00",
+      "review_method": "Verifier reached persist(report) only after exact replacement execution, matching runtime, successful newer Scheduler attempt and original checkpoint preservation checks passed. The original run failed when overwriting the status object; this append-only receipt records the verified checks separately."
+    },
+    "note": "Natural scheduled restart and selected historical checkpoint preservation observed after controlled cancellation. This does not certify hard-kill recovery, market-open feed continuity or full historical coverage."
+  }
+}
