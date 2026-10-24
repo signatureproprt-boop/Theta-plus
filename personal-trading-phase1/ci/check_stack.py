@@ -1,5 +1,6 @@
 """Disposable CI stack checks. Never run fixtures against a production database."""
 import json
+import os
 import secrets
 import sys
 import time
@@ -23,6 +24,11 @@ def bootstrap():
 
 
 def stack():
+    if os.environ.get('PHASE1_DISPOSABLE_CI') != '1':
+        raise SystemExit('This fixture requires an explicitly disposable CI deployment')
+    for name in ('dhan_client_id', 'dhan_access_token'):
+        if Path('/run/secrets/' + name).read_text().strip():
+            raise SystemExit('CI fixtures refuse to run with real Dhan credentials')
     import httpx
     from sqlalchemy import select, text
     from app.db import session

@@ -197,6 +197,58 @@ were compiled, not executed against TimescaleDB. Docker was unavailable in the
 build workspace; container image pulls/builds, Timescale migrations, real broker
 recovery and authenticated Dhan requests **have not been run here**.
 
+The repository now includes a separate GitHub Actions integration job that runs
+the actual Docker stack on a disposable runner. Check its latest result before
+accepting integration. It does not use real Dhan credentials or certify live data.
+The VM deployer additionally has CI-acceptance guard tests.
+
+## Automated persistent VM deployment
+
+`deploy/bootstrap-cloudshell.sh --revision VERIFIED_SHA --create-vm` is a one-time
+owner-operated Google Cloud bootstrap for `theta-pluse`, `asia-south1-a`. It enables
+Compute/IAP/OS Login APIs and creates a **billable** dedicated `personal-trading-phase1`
+VM: e2-standard-2 (2 vCPU, 8 GiB), 20 GB boot and 50 GB separately retained data disk.
+Both disks are retained rather than automatically deleted with the instance.
+It assumes the project's `default` VPC exists; it does not modify Theta Plus.
+
+The VM has no attached cloud service account. SSH is restricted by VM-targeted
+rules to Google's IAP TCP forwarding range; the API remains on loopback. The
+installer uses official Docker packages, installs the exact selected source
+revision and starts a five-minute systemd updater. That updater deploys a changed
+main revision only after the named Docker integration job passes. This uses public
+repository reads and does not grant GitHub additional project IAM roles.
+
+PostgreSQL/Redis bind mounts reside on the separate data disk. Credentials and
+configuration persist independently of source releases. Updates back up PostgreSQL
+before applying a new application release and verify matching container images,
+API readiness and Celery ping. Failed application rollout attempts restore the
+previous application release; this does not claim automatic database-schema rollback.
+No data volumes, old backups or old release images are pruned automatically.
+
+The cloud identity currently needs a successful read-only preflight; if Google
+returns `SERVICE_DISABLED` or permission denied, the GitHub cloud job reports that
+blocker and does not provision resources. The owner bootstrap is the one-time
+path when the existing Cloud Run deployer lacks VM provisioning rights.
+
+The installer deliberately creates blank Dhan credential files. After installation,
+open a protected interactive IAP SSH session and run:
+
+```bash
+sudo python3 /srv/personal-trading/current/setup_secrets.py
+```
+
+Then use the included helper:
+
+```bash
+cd /srv/personal-trading/current
+sudo env PHASE1_APP_IMAGE=personal-trading-phase1:VERIFIED_SHA docker compose -p personal-trading-phase1 -f compose.yaml -f compose.vps.yaml exec -T api python -m app.verify_phase1 auth
+```
+
+Enter the actual deployed SHA from `/srv/personal-trading/release.json`. No token
+is extracted/copied from the existing Theta Plus collector. Avoid uncoordinated
+collection against the same account. `VERIFICATION.md` contains portable local
+commands; on the VM include the project, override and release-image settings above.
+
 On the VPS, check these before accepting Phase 1:
 
 1. `docker compose config --quiet`, image build, successful migration and ready API.

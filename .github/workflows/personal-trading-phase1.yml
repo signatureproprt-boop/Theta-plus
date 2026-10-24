@@ -30,8 +30,7 @@ jobs:
       - run: docker compose up -d
       - name: Verify live service integration and non-destructive persistence
         run: |
-          docker compose cp ci/check_stack.py api:/tmp/check_stack.py
-          docker compose exec -T api python /tmp/check_stack.py stack
+          docker compose exec -T -e PHASE1_DISPOSABLE_CI=1 api python -c "exec(compile(__import__('sys').stdin.read(), 'check_stack.py', 'exec'))" stack < ci/check_stack.py
           docker compose exec -T worker celery -A app.celery_app:celery_app inspect ping --timeout=10
       - name: Isolated CI service logs
         if: always()
