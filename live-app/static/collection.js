@@ -87,7 +87,7 @@
         <div class="table-wrap"><table><thead><tr><th>Daily catch-up</th><th>Job state</th><th>Requested dates</th><th>Outcomes</th></tr></thead><tbody>${history||'<tr><td colspan="4">Daily catch-up not scheduled yet.</td></tr>'}</tbody></table></div>
         <div class="table-wrap"><table><thead><tr><th>Saved job families</th><th>States</th><th>Attempt outcomes (includes retries)</th></tr></thead><tbody>${outcomes||'<tr><td colspan="3">Audit pending.</td></tr>'}</tbody></table></div>
         <p>Unresolved catalogue mappings: ${esc(JSON.stringify(data.audit?.unresolved_catalogue_reasons||{}))}. Outcome counts are attempts, not a coverage percentage.</p>
-        <p>Watchdog: ${data.watchdog?.reported_configured?'Configured by deployment; restart acceptance test pending':'Not configured'} · ${esc(data.completion||'Coverage not certified')}</p>
+        <p>Watchdog: ${data.watchdog?.restart_test_verified?'Natural scheduled restart and saved checkpoints verified on '+esc(data.watchdog.checked_at):data.watchdog?.reported_configured?'Configured by deployment; restart acceptance test pending':'Not configured'} · ${esc(data.completion||'Coverage not certified')}</p>
         ${data.maintenance?.error?'<p role="status">'+esc(data.maintenance.error)+'</p>':''}`;
     }catch(error){$('#data-system-status').textContent='Data system status unavailable: '+error.message;}
     finally{systemBusy=false;}

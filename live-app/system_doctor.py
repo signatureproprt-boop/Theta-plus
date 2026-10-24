@@ -200,7 +200,11 @@ def system_checks(collector,scan):
             'families':{f:{k:v.get(k) for k in ('state','start','end','counts','verified_through')} for f,v in history.items()}}
         return ('NOT_VERIFIED' if not history else 'ISSUE' if m.get('state')=='DEGRADED' else 'NOT_VERIFIED',evidence,'Job completion is not candle/date coverage; inspect all archived outcomes')
     run('daily','catchup_coverage',daily)
-    run('worker','scheduler_restart',lambda:('NOT_VERIFIED',{'reported_configured':bool(snapshot.get('watchdog',{}).get('reported_configured'))},'Private Scheduler and hard-kill restart need a cloud acceptance test; configuration alone does not pass'))
+    from watchdog_evidence import verified as watchdog_verified
+    watchdog=snapshot.get('watchdog',{})
+    run('worker','scheduler_restart',lambda:('VERIFIED' if watchdog_verified(watchdog) else 'NOT_VERIFIED',
+        {k:watchdog.get(k) for k in ('reported_configured','basis','checked_at','restart_observed','checkpoint_verified','checkpoints_checked')},
+        'Controlled execution cancellation and natural Scheduler dispatch only. Hard-kill/lease-expiry recovery and market-open continuity are separate checks.'))
     run('history','unique_coverage',lambda:('NOT_VERIFIED',{'scope':'Every instrument/date/timeframe, including absent sessions'},'Stored-candle grids and outcomes are inspected below; absent entire series and unsupported calendars remain unverified'))
     for symbol in ('nifty','banknifty'):
         def workspace_check(symbol=symbol):

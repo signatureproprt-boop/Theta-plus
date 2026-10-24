@@ -66,3 +66,6 @@ jobs:
       - name: Verify collector release and heartbeat
         working-directory: live-app
         run: python3 deploy/check_worker_release.py
+      - name: Verify natural Scheduler recovery on authorized closed-market day
+        working-directory: live-app
+        run: python3 deploy/verify_watchdog.py

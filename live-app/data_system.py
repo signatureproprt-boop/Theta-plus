@@ -440,6 +440,9 @@ def status(store,clock=None):
     clock=clock or now();config=store.document(CONTROL)[0] or {};plan=store.document(SCOPE)[0] or {}
     worker=store.document('control/worker')[0] or {}
     doctor=store.document('doctor/current')[0] or {}
+    from watchdog_evidence import verified as watchdog_verified
+    watchdog=store.document('control/data-watchdog')[0] or {}
+    watchdog={**watchdog,'restart_test_verified':watchdog_verified(watchdog,clock)}
     budget=store.document('control/provider-budget')[0] or {}
     # Public progress counters contain no Admin checks, raw records or findings
     # details. The detailed diagnostic report keeps its existing Admin gate.
@@ -466,7 +469,7 @@ def status(store,clock=None):
     return {'enabled':bool(config.get('enabled')),'scope':plan.get('scope'),'subscription_revision':plan.get('revision'),
             'discovery_state':plan.get('discovery_state'),'scope_warning':plan.get('scope_warning'),
             'worker_active':active,'worker_lease_held':lease_held,'worker_heartbeat':worker.get('heartbeat'),
-            'worker_build_id':worker.get('build_id'),'expected_worker_build_id':runtime_build(),
+            'worker_execution':worker.get('execution'),'worker_build_id':worker.get('build_id'),'expected_worker_build_id':runtime_build(),
             'worker_build_matches':worker.get('build_id')==runtime_build(),
             'request_pacing':{'policy':budget.get('policy','legacy-shared'),
                               'day':budget.get('day'),'attempts_reserved':budget.get('calls',0),
@@ -487,6 +490,6 @@ def status(store,clock=None):
                         'catalogue_updates':store.document('system/backfill-catalogue')[0] or {}},
             'audit':store.document('system/data-audit')[0] or {},
             'diagnostics':store.document('system/diagnostics')[0] or {},
-            'watchdog':store.document('control/data-watchdog')[0] or {'verified':False},
+            'watchdog':watchdog,
             'calendar':session(clock.astimezone(IST).date()),'server_time':clock.isoformat(),
             'completion':'Not certified. Review scope, gaps, timestamps, calendar and historical outcomes.'}
