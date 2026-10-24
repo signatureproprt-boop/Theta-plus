@@ -1,3 +1,4 @@
+import os
 """Official DhanHQ-py data adapter. No broker execution methods are exposed."""
 import asyncio
 import copy
@@ -134,6 +135,10 @@ class Dhan:
                 'feeds':['live','depth20','depth200'],'execution':'NO_BROKER_EXECUTION'}
 
     def _request(self,path,body,commodity_probe=False):
+        if self.store and os.environ.get('THETA_EMBEDDED')!='1':
+            migration=self.store.document('control/migration')[0] or {}
+            if migration.get('state') in ('FENCED','NEW_BACKEND'):
+                raise ProviderError('Collection moved to the unified backend',code='MIGRATED',status=503)
         token=self.credentials.token();client_id=self.credentials.client_id
         context=DhanContext(client_id,token)
         http=context.get_dhan_http()

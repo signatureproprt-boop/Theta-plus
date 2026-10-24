@@ -12,6 +12,7 @@ def main():
         conn.execute(text("""SELECT create_hypertable(
             'historical_data', 'timestamp', if_not_exists => TRUE,
             chunk_time_interval => INTERVAL '7 days')"""))
+        conn.execute(text("SELECT create_hypertable('live_ticks', 'timestamp', if_not_exists => TRUE, chunk_time_interval => INTERVAL '1 day')"))
     print('Schema v1 and historical_data hypertable ready')
 
 

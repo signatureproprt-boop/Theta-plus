@@ -179,6 +179,9 @@ class InstrumentDirectory:
             previous=numeric(row.get('previous_close'))
             if previous:
                 result[item['key']].update(previous_close=previous,change=price-previous,change_pct=100*(price-previous)/previous)
+        if hasattr(self.collector.store,'live_quotes'):
+            try:result.update(self.collector.store.live_quotes(items))
+            except Exception:self.snapshot_errors+=1
         return result
 
     def overview(self,keys=''):
@@ -221,6 +224,8 @@ class InstrumentDirectory:
         series=digest({'exchange':item['exchange'],'segment':item['segment'],'sid':item['security_id'],'instrument':item['instrument'],'family':family,'variant':variant})
         days=[(start+timedelta(days=n)).isoformat() for n in range((end-start).days)]
         with ThreadPoolExecutor(max_workers=8) as pool:documents=list(pool.map(lambda d:self.collector.store.document('candles/'+series+'/'+d)[0],days))
+        if hasattr(self.collector.store,'native_candle_document'):
+            documents=[self.collector.store.native_candle_document(item,series,day,variant,doc) for day,doc in zip(days,documents)]
         candles={};conflicts=set();invalid=0;found=[];clock=datetime.now(timezone.utc)
         for day,doc in zip(days,documents):
             if not doc:continue

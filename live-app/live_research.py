@@ -1,3 +1,4 @@
+import os
 """Authenticated, request-scoped Dhan stream. Independent of collection worker.
 
 No orders. No credential-bearing URLs/errors are emitted or persisted. LTT is
@@ -140,7 +141,13 @@ async def stream(provider,store,board,symbol,request,contract_id=''):
                 return {'type':'batch','ticks':list(pending),'received_at':now().isoformat(),
                         'last_tick_received_at':last_tick,'stream_id':stream_id,
                         'last_sequence':sequence,'transport':'Ordered decoded provider price observations; UI painting may coalesce. Upstream tick loss is not certified.'}
+            next_migration_check=time.monotonic()
             while time.monotonic()<deadline:
+                if os.environ.get('THETA_EMBEDDED')!='1' and time.monotonic()>=next_migration_check:
+                    migration=(await asyncio.to_thread(store.document,'control/migration'))[0] or {}
+                    next_migration_check=time.monotonic()+5
+                    if migration.get('state') in ('FENCED','NEW_BACKEND'):
+                        yield event({'type':'status','state':'MIGRATED','message':'Live data moved to unified backend'});return
                 if await request.is_disconnected():return
                 try:
                     frame=await asyncio.wait_for(socket.recv(),timeout=1)

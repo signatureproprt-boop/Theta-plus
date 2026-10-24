@@ -15,7 +15,7 @@ def bootstrap():
     folder.chmod(0o700)
     for name in ('postgres_password', 'api_key'):
         (folder / (name + '.txt')).write_text(secrets.token_urlsafe(48))
-    for name in ('dhan_client_id', 'dhan_access_token'):
+    for name in ('dhan_client_id', 'dhan_access_token', 'legacy_admin_hash'):
         (folder / (name + '.txt')).write_text('')
     for path in folder.iterdir():
         path.chmod(0o644)
@@ -118,6 +118,85 @@ def stack():
             assert first.symbol == 'CI_FUT_0'
             db.rollback()
         print('STACK_MASTER_IMPORT_IDENTITY_REUSE_GUARD_AND_PROGRESS_VERIFIED', flush=True)
+
+
+        # Unified deployment really serves the retained website and API from this container.
+        home = http.get('/')
+        assert home.status_code == 200 and 'desk-market-watch' in home.text
+        assert http.get('/api/status').json()['dhan_configured'] is False
+        assert http.get('/api/v2/system').json()['storage'] == 'PostgreSQL + TimescaleDB'
+        assert http.get('/live/status').json()['owner']['state'] == 'AWAITING_VERIFIED_HANDOVER'
+        print('STACK_UNIFIED_WORKSPACE_AND_HANDOVER_HOLD_VERIFIED', flush=True)
+        from app.legacy_store import PostgresStore
+        from app.merge_archive import import_file
+        from app.models import LegacyObject, LiveTick, LiveGap, MasterSnapshot, MasterIdentity
+        from app.live_runtime import persist_batch
+        import hashlib
+        archive = PostgresStore()
+        assert archive.put_document('ci/merge', {'retained': True}, 0)
+        assert not archive.put_document('ci/merge', {'retained': False}, 0)
+        saved, version = archive.document('ci/merge')
+        assert saved == {'retained': True}
+        assert archive.put_document('ci/merge', {'retained': True, 'revision': 2}, version)
+        assert not archive.put_document('ci/merge', {}, version)
+        with session() as db:
+            assert import_file(db, 'ci/source.json', b'{"original":true}') == 'inserted'
+            db.flush()
+            assert import_file(db, 'ci/source.json', b'{"original":true}') == 'unchanged'
+            assert import_file(db, 'ci/source.json', b'{"original":false}') == 'updated'
+            db.rollback()
+        event = {'kind':'tick','event_id':'ci-unified-tick','exchange_segment':'NSE_EQ',
+                 'security_id':'9999988','ltp':100,'received_at':'2025-01-02T03:45:01+00:00',
+                 'trade_time':'2025-01-02T03:45:00+00:00'}
+        entries = [(b'1-0', {b'event': json.dumps(event).encode()})]
+        persist_batch(entries);persist_batch(entries)
+        with session() as db:
+            assert db.scalar(select(func.count()).select_from(LiveTick).where(LiveTick.event_id=='ci-unified-tick')) == 1
+        print('STACK_ARCHIVE_CAS_AND_TICK_REPLAY_DEDUP_VERIFIED', flush=True)
+        # Real PG gap runner, stubbed transport only. No provider credentials or HTTP.
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        from datetime import timedelta
+        from app import dhan
+        from app.gaps import process_gap
+        from app.models import Instrument
+        sha, fingerprint = 'f'*64, 'c'*64
+        with session() as db:
+            db.add(MasterSnapshot(sha256=sha, compressed_csv=b'CI_ONLY', summary={}))
+            db.add(Instrument(exchange_segment='NSE_EQ',security_id='9999988',symbol='CI_LIVE',
+                              instrument_type='EQUITY',mapping_verified=True,review_status='OK'))
+            db.flush()
+            db.add(MasterIdentity(exchange_segment='NSE_EQ',security_id='9999988',exchange='NSE',
+                                  source_sha=sha,fingerprint=fingerprint,blocked=False))
+            db.flush()
+            gap = LiveGap(exchange_segment='NSE_EQ',security_id='9999988',fingerprint=fingerprint,
+                start=datetime(2025,1,2,3,45,tzinfo=timezone.utc),end=datetime(2025,1,2,3,47,tzinfo=timezone.utc))
+            db.add(gap);db.commit();gid = str(gap.id)
+        class Gate:
+            def __init__(self, *args): pass
+            def acquire(self): return SimpleNamespace(wait_ms=0,previous_ms=1100,recent=1)
+            def cooldown(self, *args): pass
+        candle = {'timestamp':datetime(2025,1,2,3,45,tzinfo=timezone.utc),
+            'open':Decimal('100'),'high':Decimal('101'),'low':Decimal('99'),'close':Decimal('100'),'volume':10}
+        with patch('app.gaps.RateGate', Gate), patch('app.gaps.dhan.credentials', return_value=('CI_ONLY','NOT_A_TOKEN')):
+            with patch('app.gaps.dhan.fetch', return_value=dhan.FetchResult('ROWS_RECEIVED',rows=[candle,{**candle,'timestamp':datetime(2025,1,2,3,47,tzinfo=timezone.utc)}])):
+                assert process_gap(gid) is None
+            with session() as db:
+                saved = db.get(LiveGap, uuid.UUID(gid))
+                assert saved.status == 'ROWS_RECEIVED' and saved.evidence[-1]['accepted_window_rows'] == 1
+                assert saved.evidence[-1]['coverage_verified'] is False
+                assert db.scalar(select(func.count()).select_from(HistoricalData).where(
+                    HistoricalData.security_id=='9999988')) == 1
+                retry_gap = LiveGap(exchange_segment='NSE_EQ',security_id='9999988',fingerprint=fingerprint,
+                    start=datetime(2025,1,3,3,45,tzinfo=timezone.utc),end=datetime(2025,1,3,3,47,tzinfo=timezone.utc))
+                db.add(retry_gap);db.commit();retry_id=str(retry_gap.id)
+            with patch('app.gaps.dhan.fetch',return_value=dhan.FetchResult('DH907_REVIEW',retryable=True,code='DH-907',http_status=400)):
+                assert process_gap(retry_id) > 0
+            with session() as db:
+                saved=db.get(LiveGap,uuid.UUID(retry_id))
+                assert saved.status=='RETRY_WAIT' and saved.evidence[-1]['rate_limit_evidence'] is False
+                assert db.get(Instrument,('NSE_EQ','9999988')).mapping_verified is True
+        print('STACK_FINALIZED_GAP_WINDOW_AND_DH907_SEPARATION_VERIFIED', flush=True)
 
 
 if __name__ == '__main__':

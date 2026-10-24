@@ -194,5 +194,12 @@ class MarketBoard:
             'status':'SEPARATE_FEED_REQUIRED','currency':'USD' if group=='USD Commodities' else None,
             'unit':{'gold_usd':'USD / troy oz','silver_usd':'USD / troy oz','wti_usd':'USD / barrel','brent_usd':'USD / barrel'}.get(k,'Contract feed required'),
             'note':'Separate authorised feed and exact contract/expiry required; MCX INR quotes are not USD futures prices'} for k,label,group in EXTERNAL)
+        if hasattr(self.store,'live_quotes'):
+            try:
+                quotes=self.store.live_quotes([i for i in items if i.get('segment') and i.get('security_id')])
+                for item in items:
+                    quote=quotes.get(item['key'])
+                    if quote:item.update(quote,quote_at=quote.get('trade_at'),status='RECORDED_TRADE')
+            except Exception:pass
         return {'items':items,'error':self.error or saved.get('error'),'catalog_error':self.catalog_error or saved.get('catalog_error'),
             'fetched_at':batches[0]['created_at'] if batches else None,'used_in_signal':False}

@@ -3,9 +3,9 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ['personal-trading-phase1/**', '.github/workflows/personal-trading-phase1.yml']
+    paths: ['live-app/**', 'personal-trading-phase1/**', '.github/workflows/personal-trading-phase1.yml']
   pull_request:
-    paths: ['personal-trading-phase1/**', '.github/workflows/personal-trading-phase1.yml']
+    paths: ['live-app/**', 'personal-trading-phase1/**', '.github/workflows/personal-trading-phase1.yml']
 permissions:
   contents: read
 jobs:

@@ -1,0 +1,12 @@
+**/.env
+**/secrets
+**/__pycache__
+**/.pytest_cache
+**/*.pyc
+**/.git
+**/node_modules
+**/data
+**/*.zip
+**/tests
+**/import
+.git

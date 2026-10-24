@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     max_fetch_attempts: int = Field(default=4, ge=1, le=8)
     backoff_base_seconds: int = Field(default=5, ge=1)
     backoff_cap_seconds: int = Field(default=300, ge=5)
+    unified_workspace: bool = True
+    live_enabled: bool = True
+    live_connections: int = Field(default=4, ge=1, le=4)
     collect_nse_bse: bool = False
     parallel_budget_required: bool = False
     history_queue_bound: int = Field(default=500, ge=1, le=2000)

@@ -72,16 +72,18 @@ class InstrumentHistoryInput(InstrumentSelection):
     family: Literal['daily','intraday'] = 'intraday'
     interval: Literal[1,5,15,25,60] = 1
 
-def create_app(db_path=None):
+def create_app(db_path=None, *, store_override=None, credentials_override=None):
     public_workspace=os.environ.get('THETA_AUTH_MODE')=='public'
     bucket=os.environ.get('THETA_GCS_BUCKET')
     if os.environ.get('K_SERVICE') and (not bucket or (not public_workspace and not os.environ.get('THETA_API_KEY'))):
         raise RuntimeError('Cloud Run requires durable storage and configured access mode')
-    if bucket and db_path is None:
+    if store_override is not None:
+        store=store_override
+    elif bucket and db_path is None:
         from cloud_store import CloudStore
         store=CloudStore(bucket)
     else:store=Store(db_path or os.environ.get('THETA_DB_PATH',str(ROOT/'data/theta.sqlite3')))
-    credential_source=DhanCredentials()
+    credential_source=credentials_override or DhanCredentials()
     provider=Dhan(credentials=credential_source,store=store)
     board=MarketBoard(provider,store)
     app=FastAPI(title='Theta Plus Data Foundation',version=VERSION,docs_url=None,redoc_url=None,openapi_url=None)
@@ -414,6 +416,11 @@ def create_app(db_path=None):
         if result is None:raise HTTPException(404,'Data not found')
         return result
 
+    @app.get('/api/migration/status')
+    def migration_status():
+        state=store.document('control/migration')[0] or {}
+        return {'protocol':'unified-handover-v1','state':state.get('state','LEGACY_BACKEND')}
+
     @app.get('/api/status')
     def status():
         return {'version':VERSION,'dhan_configured':provider.configured,'data_sdk':provider.capabilities(),
@@ -435,8 +442,13 @@ def create_app(db_path=None):
     async def boundary(request:Request,call_next):
         host=request.headers.get('host','').split(':')[0].lower()
         allowed=set(os.environ.get('THETA_ALLOWED_HOSTS','localhost,127.0.0.1,testserver').split(','))
-        if host not in allowed:return JSONResponse({'detail':'Host not allowed'},status_code=400)
+        preview=os.environ.get('THETA_EMBEDDED')=='1' and host.endswith('.cloudshell.dev')
+        if host not in allowed and not preview:return JSONResponse({'detail':'Host not allowed'},status_code=400)
         if request.url.path.startswith('/api/'):
+            if request.method=='POST' and os.environ.get('THETA_EMBEDDED')!='1':
+                migration=await asyncio.to_thread(store.document,'control/migration')
+                if (migration[0] or {}).get('state') in ('FENCED','NEW_BACKEND'):
+                    return JSONResponse({'detail':'Collection moved to the unified backend; source data retained'},status_code=409)
             key=os.environ.get('THETA_API_KEY','')
             given=request.headers.get('authorization','').removeprefix('Bearer ')
             if not public_workspace and key and not secrets.compare_digest(key,given):return JSONResponse({'detail':'Workspace access key required'},status_code=401)
@@ -601,4 +613,4 @@ def create_app(db_path=None):
     app.mount('/static',StaticFiles(directory=ROOT/'static'),name='static')
     return app
 
-app=create_app()
+app=None if os.environ.get('THETA_EMBEDDED')=='1' else create_app()

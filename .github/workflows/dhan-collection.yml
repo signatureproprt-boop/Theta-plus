@@ -60,12 +60,18 @@ jobs:
       - name: Deploy and verify candidate with rollback
         working-directory: live-app
         run: bash deploy/release-existing.sh
+      - name: Read durable migration fence before starting legacy collection
+        id: handover
+        run: python3 live-app/deploy/check_migration.py
       - name: Activate verified collector with checkpoint handover
+        if: steps.handover.outputs.migrated != 'true'
         working-directory: live-app
         run: python3 deploy/activate_worker.py
       - name: Verify collector release and heartbeat
+        if: steps.handover.outputs.migrated != 'true'
         working-directory: live-app
         run: python3 deploy/check_worker_release.py
       - name: Verify natural Scheduler recovery on authorized closed-market day
+        if: steps.handover.outputs.migrated != 'true'
         working-directory: live-app
         run: python3 deploy/verify_watchdog.py

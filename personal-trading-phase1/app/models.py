@@ -159,3 +159,42 @@ class HistoryProgress(Base):
     planned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime(1970, 1, 1, tzinfo=timezone.utc), index=True)
     __table_args__ = (ForeignKeyConstraint(['exchange_segment', 'security_id'],
                          ['instruments.exchange_segment', 'instruments.security_id']),)
+
+
+class LegacyObject(Base):
+    """Byte-exact retained GCS archive, plus compatibility-store CAS revisions."""
+    __tablename__ = 'legacy_objects'
+    path: Mapped[str] = mapped_column(String(1024), primary_key=True)
+    content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    version: Mapped[int] = mapped_column(BigInteger, default=1)
+    source_sha256: Mapped[str | None] = mapped_column(String(64))
+
+
+class LiveTick(Base):
+    __tablename__ = 'live_ticks'
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    exchange_segment: Mapped[str] = mapped_column(String(24), index=True)
+    security_id: Mapped[str] = mapped_column(String(32), index=True)
+    trade_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+
+
+class LiveGap(Base):
+    __tablename__ = 'live_gaps'
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    exchange_segment: Mapped[str] = mapped_column(String(24))
+    security_id: Mapped[str] = mapped_column(String(32))
+    start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    end: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32), default='QUEUED', index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    last_dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    evidence: Mapped[list] = mapped_column(JSONB, default=list)
+    __table_args__ = (ForeignKeyConstraint(['exchange_segment', 'security_id'],
+                         ['instruments.exchange_segment', 'instruments.security_id']),
+                     CheckConstraint('"end" > start'),
+                     UniqueConstraint('exchange_segment', 'security_id', 'start', 'end'))

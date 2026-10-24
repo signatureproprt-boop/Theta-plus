@@ -17,6 +17,10 @@ def main():
         # Container UIDs differ. Parent directory is owner-only on the host;
         # files are mounted read-only into only the selected containers.
         path.chmod(0o644)
+    admin_hash = folder / 'legacy_admin_hash.txt'
+    if not admin_hash.exists():
+        admin_hash.write_text('')
+    admin_hash.chmod(0o644)
     client_id = input('Dhan Client ID (blank to defer authentication): ').strip()
     token = getpass.getpass('Dhan Access Token (hidden; blank to defer): ').strip()
     for name, value in [('dhan_client_id', client_id), ('dhan_access_token', token)]:
@@ -25,6 +29,8 @@ def main():
             # Write in place: existing Compose bind mounts keep this inode.
             path.write_text(value + '\n')
         path.chmod(0o644)
+        if os.geteuid() == 0:
+            os.chown(path, 10001, 10001)
     env = root / '.env'
     if not env.exists():
         env.write_text((root / '.env.example').read_text())

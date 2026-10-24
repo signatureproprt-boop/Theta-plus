@@ -13,7 +13,7 @@ from app.models import FetchJob, Instrument, RequestAttempt, utcnow, SystemState
 from app.policy import INTERVALS, validate_identity, windows
 from app.rate_gate import redis_client
 
-app = FastAPI(title='Personal Trading — Phase 1', docs_url=None, redoc_url=None)
+app = FastAPI(title='Theta Plus — Unified Backend', docs_url=None, redoc_url=None)
 
 
 def require_key(x_api_key: str = Header(default='')):
@@ -43,7 +43,7 @@ def ready():
         redis_client().ping()
     except Exception:
         raise HTTPException(503, 'DEPENDENCY_UNAVAILABLE') from None
-    return {'database': True, 'redis': True, 'phase': 1, 'mcx': 'HOLD'}
+    return {'database': True, 'redis': True, 'phase': 2, 'mcx': 'HOLD'}
 
 
 class InstrumentInput(BaseModel):
@@ -235,3 +235,12 @@ def market_coverage(exchange_segment: str, security_id: str, start: date, end: d
             day += timedelta(days=1)
         return {'days': result, 'scope': 'Saved candles for this exact identity and interval; empty results do not prove unavailability',
                 'coverage_verified': False}
+
+
+from app.live_api import install as install_live_routes
+install_live_routes(app, protected)
+
+
+if settings().unified_workspace:
+    from app.unified import mount_workspace
+    mount_workspace(app)

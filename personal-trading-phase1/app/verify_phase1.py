@@ -56,6 +56,7 @@ def main(argv=None):
     commands.add_parser('auth')
     commands.add_parser('summary')
     commands.add_parser('market-status')
+    commands.add_parser('live-status')
     job = commands.add_parser('job')
     job.add_argument('job_id')
     job.add_argument('--timeout', type=int, default=300)
@@ -70,6 +71,10 @@ def main(argv=None):
     fetch.add_argument('--timeout', type=int, default=300)
     fetch.add_argument('--confirm-identity', action='store_true', help='Confirm that you checked this exact identity against Dhan')
     args = parser.parse_args(argv)
+    if args.command == 'live-status':
+        with httpx.Client(base_url=args.url, headers={'X-API-Key': Path(args.api_key_file).read_text().strip()}, timeout=30) as http:
+            show(request(http, 'GET', '/live/status'))
+        return 0
     if args.command == 'fetch':
         if not args.confirm_identity:
             parser.error('Verify the exact identity first, then pass --confirm-identity')

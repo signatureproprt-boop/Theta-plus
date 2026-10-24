@@ -7,10 +7,15 @@ services:
     volumes:
       - /srv/personal-trading/data/redis:/data
   api:
+    volumes:
+      - /srv/personal-trading/import:/legacy-import:ro
     image: ${PHASE1_APP_IMAGE:?Set verified release image}
     environment: &collection_environment
       COLLECT_NSE_BSE: "true"
       PARALLEL_BUDGET_REQUIRED: "true"
+  live:
+    image: ${PHASE1_APP_IMAGE:?Set verified release image}
+    environment: *collection_environment
   worker:
     image: ${PHASE1_APP_IMAGE:?Set verified release image}
     environment: *collection_environment

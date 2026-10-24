@@ -29,6 +29,8 @@ def worker_status(store):
 
 def launch_worker(store):
     """Called only after Admin authorization. Uses service identity, never Dhan auth."""
+    if (store.document('control/migration')[0] or {}).get('state') in ('FENCED','NEW_BACKEND'):
+        return {'mode':'unified_backend','state':'migrated'}
     resource=os.environ.get('THETA_COLLECTION_WORKER','')
     if not RESOURCE.fullmatch(resource):raise HTTPException(503,'Background worker is not configured')
     if worker_status(store)['active']:return {'mode':'cloud_run_job','state':'active'}
@@ -218,6 +220,8 @@ def main():
     if not bucket:raise RuntimeError('Worker requires the existing durable GCS bucket')
     from cloud_store import CloudStore
     store=CloudStore(bucket)
+    if (store.document('control/migration')[0] or {}).get('state') in ('FENCED','NEW_BACKEND'):
+        print('COLLECTOR_MIGRATED_TO_UNIFIED_BACKEND');return
     asyncio.run(serve(Collector(Dhan(DhanCredentials(),store=store),store)))
 
 if __name__=='__main__':main()

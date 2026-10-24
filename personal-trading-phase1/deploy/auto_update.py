@@ -48,7 +48,7 @@ def healthy(release, sha):
     image = run('docker', 'image', 'inspect', 'personal-trading-phase1:' + sha, '--format={{.Id}}', capture=True)
     for _ in range(60):
         try:
-            for service in ('api', 'worker', 'dispatcher'):
+            for service in ('api', 'worker', 'dispatcher', 'live'):
                 cid = compose(release, sha, 'ps', '-q', service, capture=True)
                 if not cid or run('docker', 'inspect', cid, '--format={{.State.Running}} {{.Image}}', capture=True) != 'true ' + image:
                     raise RuntimeError('Release container not active')
@@ -74,7 +74,7 @@ def main(revision=None):
             run('git', 'clone', '--no-checkout', '--filter=blob:none', REPO_URL, str(SOURCE))
         run('git', 'fetch', 'origin', 'main', cwd=SOURCE)
         candidate = revision or run('git', 'log', '-1', '--format=%H', 'origin/main', '--',
-                                   'personal-trading-phase1', '.github/workflows/personal-trading-phase1.yml', cwd=SOURCE, capture=True)
+                                   'personal-trading-phase1', 'live-app', '.github/workflows/personal-trading-phase1.yml', cwd=SOURCE, capture=True)
         if not re.fullmatch('[a-f0-9]{40}', candidate):
             raise RuntimeError('Invalid release revision')
         run('git', 'merge-base', '--is-ancestor', candidate, 'origin/main', cwd=SOURCE)
@@ -88,22 +88,25 @@ def main(revision=None):
             print('WAITING_FOR_SUCCESSFUL_DOCKER_INTEGRATION', candidate);return
         if shutil.disk_usage(ROOT).free < 5 * 1024 ** 3:
             raise RuntimeError('Less than 5 GiB free; release deferred without deleting data')
-        release = ROOT / 'releases' / candidate
+        bundle = ROOT / 'releases' / candidate
+        release = bundle / 'personal-trading-phase1'
         if not release.exists():
-            release.mkdir(parents=True)
-            archive = subprocess.Popen(['git', 'archive', candidate, 'personal-trading-phase1'], cwd=SOURCE, stdout=subprocess.PIPE)
-            subprocess.run(['tar', '-x', '--strip-components=1', '-C', str(release)], stdin=archive.stdout, check=True)
+            bundle.mkdir(parents=True, exist_ok=True)
+            archive = subprocess.Popen(['git', 'archive', candidate, 'personal-trading-phase1', 'live-app'], cwd=SOURCE, stdout=subprocess.PIPE)
+            subprocess.run(['tar', '-x', '-C', str(bundle)], stdin=archive.stdout, check=True)
             archive.stdout.close()
             if archive.wait():
                 raise RuntimeError('Source extraction failed')
         secret_dir = ROOT / 'secrets'
         secret_dir.mkdir(mode=0o700, exist_ok=True)
         secret_dir.chmod(0o700)
-        for name in ('postgres_password', 'api_key', 'dhan_client_id', 'dhan_access_token'):
+        for name in ('postgres_password', 'api_key', 'dhan_client_id', 'dhan_access_token', 'legacy_admin_hash'):
             path = secret_dir / (name + '.txt')
             if not path.exists():
                 path.write_text(secrets.token_urlsafe(48) if name in ('postgres_password', 'api_key') else '')
             path.chmod(0o644)
+            if name in ('dhan_client_id', 'dhan_access_token'):
+                os.chown(path, 10001, 10001)
         env_path = ROOT / '.env'
         if not env_path.exists():
             shutil.copyfile(release / '.env.example', env_path)
@@ -112,6 +115,9 @@ def main(revision=None):
             link = release / name
             if not link.exists():
                 link.symlink_to(target)
+        incoming = ROOT / 'import'
+        incoming.mkdir(mode=0o700, exist_ok=True)
+        os.chown(incoming, 10001, 10001)
         compose(release, candidate, 'config', '--quiet')
         compose(release, candidate, 'build', 'api')
         if previous and state.get('sha'):

@@ -1,7 +1,7 @@
 from celery import Celery
 from app.config import settings
 
-celery_app = Celery('personal_trading', broker=settings().redis_url, include=['app.tasks'])
+celery_app = Celery('personal_trading', broker=settings().redis_url, include=['app.tasks', 'app.gaps'])
 celery_app.conf.update(
     task_default_queue='history',
     task_serializer='json', accept_content=['json'], result_serializer='json',
