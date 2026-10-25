@@ -27,6 +27,51 @@ WORKER = '/opt/theta-archive-worker/archive_vm.py'
 SERVICE = 'theta-archive-copy.service'
 SCOPE = 'https://www.googleapis.com/auth/devstorage.read_only'
 
+WORKER_USER_SETUP = '''
+import grp, pwd, subprocess
+name = 'thetaarchive'
+uid = gid = 10001
+def lookup(function, value):
+    try: return function(value)
+    except KeyError: return None
+group = lookup(grp.getgrgid, gid)
+user = lookup(pwd.getpwuid, uid)
+named_group = lookup(grp.getgrnam, name)
+named_user = lookup(pwd.getpwnam, name)
+if named_group and named_group.gr_gid != gid:
+    raise SystemExit('ARCHIVE_GROUP_NAME_CONFLICT; existing identity retained')
+if named_user and named_user.pw_uid != uid:
+    raise SystemExit('ARCHIVE_USER_NAME_CONFLICT; existing identity retained')
+if group is None:
+    subprocess.run(['groupadd', '--system', '--gid', str(gid), name], check=True)
+if user is None:
+    subprocess.run(['useradd', '--system', '--uid', str(uid), '--gid', str(gid),
+        '--no-create-home', '--home-dir', '/srv/personal-trading/archive-worker',
+        '--shell', '/usr/sbin/nologin', name], check=True)
+assert pwd.getpwuid(uid).pw_uid == uid and grp.getgrgid(gid).gr_gid == gid
+print('VM_ARCHIVE_USER_READY')
+'''
+
+
+def ensure_worker_user():
+    remote('sudo', 'python3', '-c', WORKER_USER_SETUP)
+
+
+def start_worker():
+    ssh('sudo systemctl enable '+SERVICE+' && sudo systemctl start --no-block '+SERVICE)
+    expected = json.loads(remote('sudo','cat',REMOTE_STATE+'/request.json',capture=True))['request']
+    for _ in range(20):
+        receipt = json.loads(remote('sudo','python3',WORKER,'status',expected,capture=True))
+        if receipt.get('state') == 'VERIFIED':
+            print('VM_ARCHIVE_COPY_COMPLETE; import/handover still pending', flush=True)
+            return
+        pid = remote('sudo','systemctl','show',SERVICE,'--property=MainPID','--value',capture=True)
+        if receipt.get('state') == 'COPYING' and str(pid).strip().isdigit() and int(pid) > 0:
+            print('VM_ARCHIVE_RUNNING; worker process confirmed; import/handover still pending', flush=True)
+            return
+        time.sleep(1)
+    raise RuntimeError('VM_ARCHIVE_NOT_STARTED; inspect journal; cache retained')
+
 
 def preflight():
     marker, _ = current_fence()
@@ -137,12 +182,14 @@ def seed_cache(folder):
 def install(folder):
     existing = ssh('if sudo test -f '+REMOTE_STATE+'/installed.json; then sudo cat '+REMOTE_STATE+'/installed.json; else echo "{}"; fi', capture=True)
     if json.loads(existing).get('version') == 1:
-        ssh('sudo systemctl enable '+SERVICE+' && sudo systemctl start --no-block '+SERVICE)
-        print('VM_ARCHIVE_ALREADY_INSTALLED; current request retained', flush=True)
+        ensure_worker_user()
+        start_worker()
+        print('VM_ARCHIVE_ALREADY_INSTALLED; cache and current request retained', flush=True)
         ssh('sudo systemctl status '+SERVICE+' --no-pager --lines=5 || true')
         return
     preflight()
     configure_identity()
+    ensure_worker_user()
     ssh('sudo install -d -m 0755 /opt/theta-archive-worker && '
         'sudo install -d -m 0700 -o 10001 -g 10001 '+REMOTE_STATE)
     deploy = ROOT/'personal-trading-phase1/deploy'
@@ -163,9 +210,8 @@ def install(folder):
     remote('sudo','python3','-c',
         "import json,pathlib; p=pathlib.Path('"+REMOTE_STATE+"/installed.json');"
         "p.write_text(json.dumps({'version':1,'request':'"+expected+"'}));p.chmod(0o600)")
-    ssh('sudo systemctl enable '+SERVICE+' && sudo systemctl start --no-block '+SERVICE)
+    start_worker()
     (folder/'vm-archive-enabled.json').write_text(json.dumps({'version':1}))
-    print('VM_ARCHIVE_RUNNING; COPY ONLY, merge/import/handover still pending', flush=True)
     print('Progress: gcloud compute ssh '+VM+' --project='+PROJECT+' --zone='+ZONE+
           ' --tunnel-through-iap --command="sudo journalctl -u '+SERVICE+' -n 8 --no-pager"')
 

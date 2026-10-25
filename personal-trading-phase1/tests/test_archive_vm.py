@@ -320,3 +320,51 @@ def test_seed_upload_corruption_blocks_privileged_extraction(installer, monkeypa
     with pytest.raises(RuntimeError,match='VM_CACHE_SEED_CHECKSUM_MISMATCH'):
         installer.seed_cache(tmp_path)
     assert (tmp_path/'archive/a').read_bytes() == b'cache'
+
+
+def test_user_setup_creates_missing_host_identity_without_login(installer, monkeypatch):
+    import grp, pwd, subprocess
+    groups, users, calls = {}, {}, []
+    def lookup(rows, key):
+        if key not in rows: raise KeyError(key)
+        return rows[key]
+    monkeypatch.setattr(grp,'getgrgid',lambda key: lookup(groups,key))
+    monkeypatch.setattr(pwd,'getpwuid',lambda key: lookup(users,key))
+    monkeypatch.setattr(grp,'getgrnam',lambda key: lookup(groups,key))
+    monkeypatch.setattr(pwd,'getpwnam',lambda key: lookup(users,key))
+    def run(args, **kwargs):
+        calls.append(args)
+        if args[0] == 'groupadd': groups[10001] = SimpleNamespace(gr_gid=10001)
+        else: users[10001] = SimpleNamespace(pw_uid=10001)
+    monkeypatch.setattr(subprocess,'run',run)
+    exec(installer.WORKER_USER_SETUP, {})
+    assert [c[0] for c in calls] == ['groupadd','useradd']
+    assert '--no-create-home' in calls[1] and '/usr/sbin/nologin' in calls[1]
+    calls.clear()
+    exec(installer.WORKER_USER_SETUP, {})
+    assert calls == []
+
+
+def test_user_setup_conflict_does_not_modify_any_identity(installer, monkeypatch):
+    import grp, pwd, subprocess
+    def missing(*args): raise KeyError('missing')
+    monkeypatch.setattr(grp,'getgrgid',missing)
+    monkeypatch.setattr(pwd,'getpwuid',missing)
+    monkeypatch.setattr(grp,'getgrnam',missing)
+    monkeypatch.setattr(pwd,'getpwnam',lambda key: SimpleNamespace(pw_uid=999))
+    monkeypatch.setattr(subprocess,'run',lambda *a,**kw: pytest.fail('Must not modify conflicting accounts'))
+    with pytest.raises(SystemExit,match='ARCHIVE_USER_NAME_CONFLICT'):
+        exec(installer.WORKER_USER_SETUP, {})
+
+
+def test_failed_systemd_start_never_prints_running(installer, monkeypatch, capsys):
+    monkeypatch.setattr(installer,'ssh',lambda *a,**kw: '')
+    def remote(*args, **kwargs):
+        if args[:2] == ('sudo','cat'): return '{"request":"'+('a'*32)+'"}'
+        if 'status' in args: return '{"state":"PENDING"}'
+        return '0'
+    monkeypatch.setattr(installer,'remote',remote)
+    monkeypatch.setattr(installer.time,'sleep',lambda _: None)
+    with pytest.raises(RuntimeError,match='VM_ARCHIVE_NOT_STARTED'):
+        installer.start_worker()
+    assert 'VM_ARCHIVE_RUNNING' not in capsys.readouterr().out
