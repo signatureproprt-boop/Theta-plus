@@ -119,6 +119,19 @@ Source documentation: https://docs.cloud.google.com/run/docs/configuring/vpc-dir
 
 ## Diagnostics
 
+Archive download authentication recovery: `GOOGLE_AUTH_WAIT` means the owner Cloud
+Shell login could not supply an access token. The downloader retries every 30 seconds
+for up to ten minutes, retaining the current scan and verified checkpoints. Authorize
+Google Cloud in another terminal using `gcloud auth print-access-token >/dev/null`.
+`GOOGLE_AUTH_RESUMED` confirms recovery in the same process. Exhaustion stops with
+`GOOGLE_AUTH_WAIT_EXHAUSTED`; this is not a Dhan credential failure. No token output
+or subprocess error output is printed by this recovery path. A full host shutdown
+still requires a resumed run; authentication recovery does not keep the host alive.
+
+Resumed files still undergo generation, size and complete SHA verification. Their
+existing durable checkpoints are retained; scan-marker updates commit once per
+bounded listing page. New or repaired downloads continue to commit individually.
+
 Inside the VM API container:
 
 ```bash

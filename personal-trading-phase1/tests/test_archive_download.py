@@ -75,6 +75,28 @@ def test_failed_download_retains_checkpoints_and_resumes(tmp_path):
     assert source.downloads == ['b']
 
 
+def test_reused_records_commit_per_page_but_still_repair_corruption(tmp_path, monkeypatch):
+    import sqlite3
+    source = FakeStorage({'a': (b'first', '1'), 'b': (b'second', '1')})
+    module.mirror(source, tmp_path)
+    commits = []
+    connect = sqlite3.connect
+    class Connection(sqlite3.Connection):
+        def commit(self):
+            commits.append(1)
+            return super().commit()
+    monkeypatch.setattr(module.sqlite3, 'connect', lambda *a, **k: connect(*a, factory=Connection, **k))
+    source.downloads.clear()
+    module.mirror(source, tmp_path)
+    assert source.downloads == [] and len(commits) == 1
+    commits.clear()
+    (tmp_path/'archive/a').write_bytes(b'wrong')
+    module.mirror(source, tmp_path)
+    assert source.downloads == ['a']
+    assert (tmp_path/'archive/a').read_bytes() == b'first'
+    assert len(commits) == 2  # Repaired object immediately; reused scan marker at page end.
+
+
 def test_manifest_excludes_removed_source_without_deleting_local_archive(tmp_path):
     source = FakeStorage({'a': (b'keep', '1'), 'b': (b'old', '1')})
     root = module.mirror(source, tmp_path)
@@ -159,6 +181,68 @@ def test_token_refresh_and_permission_failure_are_bounded(monkeypatch):
         HTTPError('https://storage.googleapis.com/example', 403, 'secret-body', {}, None)))
     with pytest.raises(RuntimeError, match='^STORAGE_HTTP_403$'):
         storage.open('https://storage.googleapis.com/example')
+
+
+def test_auth_failure_waits_and_recovers_without_restarting_scan(tmp_path, monkeypatch, capsys):
+    import subprocess
+    calls, sleeps = [], []
+    def cloud(*args, **kwargs):
+        calls.append(args)
+        if len(calls) < 3:
+            raise subprocess.CalledProcessError(1, ['gcloud'], output='SECRET', stderr='SECRET')
+        return 'recovered-secret-token'
+    monkeypatch.setattr(module.time, 'sleep', sleeps.append)
+    storage = module.Storage(cloud)
+    source = FakeStorage({'a': (b'first', '1'), 'b': (b'second', '1')})
+    def pages():
+        yield [item('a', b'first')]
+        assert (tmp_path/'archive/a').read_bytes() == b'first'
+        assert storage.access_token(force=True) == 'recovered-secret-token'
+        yield [item('b', b'second')]
+    source.pages = pages
+    module.mirror(source, tmp_path)
+    assert source.downloads == ['a', 'b']
+    assert sleeps == [30, 30]
+    output = capsys.readouterr().out
+    assert output.count('GOOGLE_AUTH_WAIT;') == 2
+    assert 'GOOGLE_AUTH_RESUMED' in output
+    assert 'SECRET' not in output and 'recovered-secret-token' not in output
+
+
+def test_auth_wait_is_bounded_and_does_not_reuse_rejected_token(monkeypatch, capsys):
+    import subprocess
+    sleeps = []
+    def cloud(*args, **kwargs):
+        raise subprocess.CalledProcessError(1, ['gcloud'], stderr='SECRET')
+    storage = module.Storage(cloud)
+    storage.token = 'old-rejected-secret'
+    monkeypatch.setattr(module.time, 'sleep', sleeps.append)
+    with pytest.raises(RuntimeError, match='^GOOGLE_AUTH_WAIT_EXHAUSTED; verified files retained$'):
+        storage.access_token(force=True)
+    assert sleeps == [30] * 20
+    assert 'SECRET' not in capsys.readouterr().out
+
+
+def test_auth_recovery_is_shared_by_waiting_download_threads(monkeypatch):
+    import subprocess
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    calls, sleeps = [], []
+    def cloud(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise subprocess.CalledProcessError(1, ['gcloud'])
+        return 'shared-token'
+    monkeypatch.setattr(module.time, 'sleep', sleeps.append)
+    storage = module.Storage(cloud)
+    barrier = Barrier(4)
+    def worker():
+        barrier.wait(timeout=5)
+        return storage.access_token()
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = [pool.submit(worker) for _ in range(4)]
+        assert [f.result(timeout=5) for f in futures] == ['shared-token'] * 4
+    assert len(calls) == 2 and sleeps == [30]
 
 
 def test_inventory_detects_changed_generation_and_not_page_boundaries():

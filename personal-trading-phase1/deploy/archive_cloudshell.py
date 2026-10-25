@@ -14,6 +14,7 @@ import os
 from pathlib import Path, PurePosixPath
 import shutil
 import sqlite3
+import subprocess
 import threading
 import time
 from urllib.error import HTTPError, URLError
@@ -26,6 +27,8 @@ MAX_OBJECT_BYTES = 256 * 1024**2
 DISK_RESERVE = 256 * 1024**2
 PAGE_SIZE = 200
 WORKERS = 12
+AUTH_RETRY_SECONDS = 30
+AUTH_ATTEMPTS = 21  # Wait up to ten minutes for owner Cloud Shell authorization.
 
 
 class MediaResponse:
@@ -125,8 +128,27 @@ class Storage:
     def access_token(self, force=False):
         with self.lock:
             if force or self.token is None or time.monotonic() - self.token_at > 2700:
-                self.token = self.cloud('auth', 'print-access-token', capture=True)
-                self.token_at = time.monotonic()
+                for attempt in range(AUTH_ATTEMPTS):
+                    try:
+                        token = self.cloud('auth', 'print-access-token', capture=True).strip()
+                        if not token:
+                            raise ValueError('EMPTY_ACCESS_TOKEN')
+                    except (subprocess.CalledProcessError, OSError, ValueError):
+                        # Do not print subprocess output: it may contain credentials.
+                        # Keep the scan/checkpoints alive while the owner reauthorizes
+                        # in another terminal. The lock prevents parallel refresh storms.
+                        if attempt == AUTH_ATTEMPTS - 1:
+                            raise RuntimeError('GOOGLE_AUTH_WAIT_EXHAUSTED; verified files retained') from None
+                        print('GOOGLE_AUTH_WAIT; authorize Google Cloud in another terminal; retry in',
+                              AUTH_RETRY_SECONDS, 'seconds;',
+                              time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), flush=True)
+                        time.sleep(AUTH_RETRY_SECONDS)
+                        continue
+                    self.token = token
+                    self.token_at = time.monotonic()
+                    if attempt:
+                        print('GOOGLE_AUTH_RESUMED; continuing current archive scan', flush=True)
+                    break
             return self.token
 
     def open(self, url, raw=False):
@@ -288,7 +310,11 @@ def mirror(storage, folder):
                 sha, skipped = future.result()
                 db.execute('INSERT OR REPLACE INTO objects VALUES (?,?,?,?,?)',
                     (item['name'], str(item['generation']), int(item['size']), sha, scan))
-                db.commit()  # A browser/host interruption loses at most current downloads.
+                # New downloads retain per-object durable checkpoints. Reused files
+                # already have durable generation/size/SHA records; only their scan
+                # marker changes, so commit those together at the page boundary.
+                if not skipped:
+                    db.commit()
                 count += 1
                 reused += int(skipped)
                 total_bytes += int(item['size'])
@@ -297,6 +323,7 @@ def mirror(storage, folder):
                     print('ARCHIVE_COPY_PROGRESS', count, 'verified;', reused, 'reused;', total_bytes,
                         'bytes;', round(count / elapsed, 1), 'files/s;',
                         time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), flush=True)
+            db.commit()
         if not count:
             raise RuntimeError('EMPTY_SOURCE_ARCHIVE')
         # Stream the manifest; exclude old local objects no longer in the source.
