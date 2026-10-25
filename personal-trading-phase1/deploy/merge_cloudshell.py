@@ -1,6 +1,7 @@
 """Owner-run, checkpointed handover. Uses existing Google Cloud Shell credentials.
 
-No IAM changes, public ports, credential output, source deletion or commodity fixes.
+No IAM changes in this handover command, public ports, credential output, source
+deletion or commodity fixes. The optional VM copy installer grants bucket read only.
 """
 import json
 from pathlib import Path
@@ -85,24 +86,53 @@ def inventory_digest():
     return streamed_digest(Storage(cloud))
 
 
+def vm_archive(quiescent=False):
+    """Wait for a systemd-owned copy; losing this SSH client cannot stop it."""
+    state = '/srv/personal-trading/archive-worker'
+    worker = '/opt/theta-archive-worker/archive_vm.py'
+    installed = json.loads(ssh('if sudo test -f '+state+'/installed.json; then sudo cat '+
+                              state+'/installed.json; else echo "{}"; fi', capture=True))
+    if installed.get('version') != 1:
+        return None
+    expected = json.loads(remote('sudo','cat',state+'/request.json',capture=True))['request']
+    if quiescent:
+        expected = uuid.uuid4().hex
+        remote('sudo','python3',worker,'queue',expected)
+        remote('sudo','chown','-R','10001:10001',state)
+        remote('sudo','systemctl','restart','--no-block','theta-archive-copy.service')
+    else:
+        remote('sudo','systemctl','start','--no-block','theta-archive-copy.service')
+    previous = None
+    for _ in range(1440):  # Owner can reconnect; worker itself has no such deadline.
+        receipt = json.loads(remote('sudo','python3',worker,'status',expected,capture=True))
+        if receipt.get('state') == 'VERIFIED':
+            print('VM_ARCHIVE_VERIFIED', receipt['manifest_sha256'], flush=True)
+            return state+'/archive'
+        if receipt.get('state') != previous:
+            print('VM_ARCHIVE_WAIT', receipt.get('state'), '; persistent worker owns copy', flush=True)
+            previous = receipt.get('state')
+        time.sleep(30)
+    raise RuntimeError('VM_ARCHIVE_STILL_RUNNING; reconnect to persistent worker')
+
+
 def mirror_and_import(folder, quiescent=False):
     from archive_cloudshell import Storage, mirror as resumable_mirror
     before = inventory_digest() if quiescent else None
-    print('ARCHIVE_DOWNLOAD_STARTED; bounded pages, verified files resume after interruption',flush=True)
-    mirror = resumable_mirror(Storage(cloud), folder)
-    # No deletion switches: final pass adds/replaces only owner-exported files.
-    ssh('mkdir -p -m 700 ~/theta-merge-incoming')
-    print('ARCHIVE_VM_TRANSFER_STARTED',flush=True)
-    # One streamed tar connection avoids SCP opening a network operation per object.
-    transfer_archive(mirror)
-    user_home = ssh('printf %s "$HOME"', capture=True)
+    source = vm_archive(quiescent=quiescent)
+    if source is None:
+        print('ARCHIVE_DOWNLOAD_STARTED; bounded pages, verified files resume after interruption',flush=True)
+        mirror = resumable_mirror(Storage(cloud), folder)
+        # No deletion switches: final pass adds/replaces only owner-exported files.
+        ssh('mkdir -p -m 700 ~/theta-merge-incoming')
+        print('ARCHIVE_VM_TRANSFER_STARTED',flush=True)
+        transfer_archive(mirror)
+        source = ssh('printf %s "$HOME"', capture=True) + '/theta-merge-incoming/archive'
     remote('sudo', 'python3', '-c',
         "from pathlib import Path;import shutil,os,sys; "
-        "src=Path(sys.argv[1])/'theta-merge-incoming'; "
-        "src=src/'archive' if (src/'archive'/'migration-manifest.json').exists() else src; "
+        "src=Path(sys.argv[1]); "
         "dst=Path('/srv/personal-trading/import');shutil.copytree(src,dst,dirs_exist_ok=True); "
         "os.chown(dst,10001,10001);os.chmod(dst,0o700); "
-        "exec(\"for p in dst.rglob('*'):\n os.chown(p,10001,10001);os.chmod(p,0o700 if p.is_dir() else 0o600)\")", user_home)
+        "exec(\"for p in dst.rglob('*'):\n os.chown(p,10001,10001);os.chmod(p,0o700 if p.is_dir() else 0o600)\")", source)
     print('ARCHIVE_DATABASE_IMPORT_STARTED',flush=True)
     receipt = json.loads(api_module('app.merge_archive', 'import', '/legacy-import', capture=True).splitlines()[-1])
     print('ARCHIVE_DATABASE_IMPORT_RESULT',receipt.get('state'),receipt.get('objects'),flush=True)

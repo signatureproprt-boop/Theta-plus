@@ -147,3 +147,47 @@ The retained website uses its existing admin password for privileged data operat
 A queued stream or old receipt time is not evidence of fresh exchange data. Inspect
 trade timestamps, pending-entry count, actual gap outcomes and the next market session.
 Load/capacity and market-open continuity still require live acceptance testing.
+# Persistent archive copy on the existing VM
+
+Cloud Shell `nohup` survives terminal disconnection, **not a Cloud Shell host
+restart**. For the long initial copy, use the existing persistent VM:
+
+```bash
+cd "$HOME/theta-merge-runner" && git pull --ff-only && python3 personal-trading-phase1/deploy/install_archive_vm.py
+```
+
+The installer requires successful Docker integration for the exact revision. It
+refuses FENCED/NEW_BACKEND/public non-legacy state, an active VM live owner, or an
+unrelated attached identity. It creates `theta-archive-reader` with
+`roles/storage.objectViewer` **on the archive bucket only**, no project role and
+no key file. Attaching the identity to an identity-free VM requires **one VM
+stop/start**; the persistent disks remain. This does temporarily interrupt the
+VM services. The public legacy service continues to serve its existing URL.
+This is an explicit exception to the original identity-free VM design; the
+ordinary handover script still makes no IAM changes.
+
+Cached Cloud Shell files and a consistent SQLite backup are seeded to
+`/srv/personal-trading/archive-worker` over one compressed IAP stream. Nothing is
+deleted from Cloud Shell or GCS. A failed seed leaves the original cache intact;
+rerunning the installer can retry it. The worker revalidates generation, size
+and SHA before reuse. GCS downloads retain the provider checksum validation.
+
+The enabled `theta-archive-copy.service` owns the copy, retries failures with a
+60-second delay, and resumes from the data disk after a VM reboot. Metadata
+credentials renew automatically. No gcloud/user session is used by the worker.
+The UID 10001 service can write only its protected workspace. No broker requests,
+database import, collector fence or traffic promotion are made by the installer.
+
+Progress, including real object counts, is in the VM journal:
+
+```bash
+gcloud compute ssh personal-trading-phase1 --project=theta-pluse --zone=asia-south1-a --tunnel-through-iap --command='sudo journalctl -u theta-archive-copy.service -n 10 --no-pager'
+```
+
+After `VM_ARCHIVE_COPY_COMPLETE`, the existing `start_merge_cloudshell.sh`
+automatically consumes this VM archive instead of downloading again in Cloud
+Shell. Its final fenced pass requests a fresh VM scan, waits for a request-bound
+manifest receipt, imports into the database, and keeps the original checksum,
+source-stability and live-handover gates. **Copy complete does not mean merge
+complete.** The owner handover still runs in Cloud Shell; a host loss after the
+FENCED stage needs fence recovery review rather than a blind restart.
