@@ -1,0 +1,256 @@
+"""Bounded-memory, generation-pinned, resumable owner archive download.
+
+Uses the existing gcloud login. Access tokens stay in memory, never in files/logs.
+Source objects are read-only. No broker requests or instrument mapping occur here.
+"""
+import base64
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+import fcntl
+import hashlib
+from http.client import IncompleteRead
+import json
+import os
+from pathlib import Path, PurePosixPath
+import shutil
+import sqlite3
+import threading
+import time
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlencode
+from urllib.request import Request, urlopen
+import uuid
+
+BUCKET = 'theta-pluse-theta-plus-data'
+MAX_OBJECT_BYTES = 256 * 1024**2
+DISK_RESERVE = 256 * 1024**2
+PAGE_SIZE = 200
+WORKERS = 4
+
+
+@contextmanager
+def workspace():
+    root = Path.home() / '.local/state/theta-unified-merge'
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if root.is_symlink():
+        raise RuntimeError('UNSAFE_MERGE_WORKSPACE')
+    root.chmod(0o700)
+    with (root / 'run.lock').open('a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError('MERGE_ALREADY_RUNNING; inspect theta-merge.log') from None
+        yield root
+
+
+def safe_path(root, name):
+    parts = PurePosixPath(name).parts
+    if (not name or name.startswith('/') or '\\' in name or '\x00' in name or
+            any(p in ('', '.', '..') for p in name.split('/')) or
+            name == 'migration-manifest.json' or len(name) > 1024):
+        raise RuntimeError('UNSAFE_SOURCE_OBJECT_PATH')
+    destination = root.joinpath(*parts)
+    for parent in (destination, *destination.parents):
+        if parent.is_symlink():
+            raise RuntimeError('SYMLINK_IN_ARCHIVE')
+        if parent == root:
+            break
+    return destination
+
+
+def file_sha(path):
+    digest = hashlib.sha256()
+    with path.open('rb') as stream:
+        for chunk in iter(lambda: stream.read(256 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+class Storage:
+    def __init__(self, cloud):
+        self.cloud = cloud
+        self.token = None
+        self.token_at = 0
+        self.lock = threading.Lock()
+
+    def access_token(self, force=False):
+        with self.lock:
+            if force or self.token is None or time.monotonic() - self.token_at > 2700:
+                self.token = self.cloud('auth', 'print-access-token', capture=True)
+                self.token_at = time.monotonic()
+            return self.token
+
+    def open(self, url, raw=False):
+        for attempt in range(4):
+            try:
+                return urlopen(Request(url, headers={
+                    'Authorization': 'Bearer ' + self.access_token(),
+                    # Prevent transparent GCS gzip decompression: preserve source bytes.
+                    'Accept-Encoding': 'gzip' if raw else 'identity',
+                }), timeout=45)
+            except HTTPError as exc:
+                code = exc.code
+                exc.close()
+                if code == 401 and attempt < 3:
+                    self.access_token(force=True)
+                    continue
+                if code not in (408, 429, 500, 502, 503, 504) or attempt == 3:
+                    raise RuntimeError('STORAGE_HTTP_' + str(code)) from None
+            except (URLError, TimeoutError):
+                if attempt == 3:
+                    raise RuntimeError('STORAGE_NETWORK_RETRIES_EXHAUSTED') from None
+            time.sleep(2**attempt)
+
+    def pages(self):
+        page_token = None
+        previous = None
+        while True:
+            query = {'maxResults': PAGE_SIZE,
+                'fields': 'nextPageToken,items(name,generation,size,md5Hash,crc32c)'}
+            if page_token:
+                query['pageToken'] = page_token
+            with self.open('https://storage.googleapis.com/storage/v1/b/' + BUCKET + '/o?' + urlencode(query)) as response:
+                page = json.load(response)
+            items = page.get('items', [])
+            if not isinstance(items, list) or len(items) > PAGE_SIZE:
+                raise RuntimeError('UNEXPECTED_STORAGE_PAGE')
+            for item in items:
+                if previous is not None and item['name'] <= previous:
+                    raise RuntimeError('STORAGE_LIST_ORDER_CHANGED')
+                previous = item['name']
+            yield items
+            next_token = page.get('nextPageToken')
+            if not next_token:
+                break
+            if next_token == page_token:
+                raise RuntimeError('STORAGE_PAGE_TOKEN_REPEATED')
+            page_token = next_token
+
+    def media(self, item):
+        return self.open('https://storage.googleapis.com/storage/v1/b/' + BUCKET +
+            '/o/' + quote(item['name'], safe='') + '?' + urlencode({
+                'alt': 'media', 'generation': item['generation']}), raw=True)
+
+
+def inventory_digest(storage):
+    digest = hashlib.sha256()
+    count = 0
+    for page in storage.pages():
+        for item in page:
+            digest.update(json.dumps(item, sort_keys=True, separators=(',', ':')).encode() + b'\n')
+            count += 1
+        if count and count % 10000 == 0:
+            print('ARCHIVE_INVENTORY_PROGRESS', count, flush=True)
+    return digest.hexdigest()
+
+
+def crc_table():
+    table = []
+    for value in range(256):
+        for _ in range(8):
+            value = (value >> 1) ^ (0x82F63B78 if value & 1 else 0)
+        table.append(value)
+    return table
+
+
+CRC_TABLE = crc_table()
+
+
+def download_one(storage, root, item, cached):
+    path = safe_path(root, item['name'])
+    size = int(item['size'])
+    if not str(item['generation']).isdigit() or not 0 <= size <= MAX_OBJECT_BYTES:
+        raise RuntimeError('SOURCE_OBJECT_REQUIRES_REVIEW')
+    if (cached and cached[0] == str(item['generation']) and cached[1] == size and
+            path.is_file() and path.stat().st_size == size and file_sha(path) == cached[2]):
+        return cached[2], True
+    if not item.get('md5Hash') and not item.get('crc32c'):
+        raise RuntimeError('SOURCE_CHECKSUM_MISSING')
+    if shutil.disk_usage(root).free < DISK_RESERVE + MAX_OBJECT_BYTES * WORKERS:
+        raise RuntimeError('ARCHIVE_LOCAL_DISK_LOW; source retained; do not delete trading data')
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    temporary = path.parent / ('.theta-download-' + uuid.uuid4().hex)
+    try:
+        for attempt in range(4):
+            sha, md5 = hashlib.sha256(), hashlib.md5()
+            crc, received = 0xFFFFFFFF, 0
+            try:
+                with storage.media(item) as response, temporary.open('wb') as stream:
+                    temporary.chmod(0o600)
+                    for chunk in iter(lambda: response.read(256 * 1024), b''):
+                        received += len(chunk)
+                        if received > size:
+                            raise RuntimeError('SOURCE_OBJECT_SIZE_MISMATCH')
+                        stream.write(chunk)
+                        sha.update(chunk)
+                        md5.update(chunk)
+                        if not item.get('md5Hash'):
+                            for byte in chunk:
+                                crc = CRC_TABLE[(crc ^ byte) & 0xFF] ^ (crc >> 8)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                break
+            except (URLError, TimeoutError, ConnectionError, OSError, IncompleteRead) as exc:
+                if isinstance(exc, OSError) and exc.errno in (28, 122):
+                    raise RuntimeError('ARCHIVE_LOCAL_DISK_FULL; downloaded checkpoints retained') from None
+                if attempt == 3:
+                    raise RuntimeError('STORAGE_DOWNLOAD_INTERRUPTED; rerun resumes verified files') from None
+                time.sleep(2**attempt)
+        provider_checksum = (base64.b64encode(md5.digest()).decode() if item.get('md5Hash') else
+            base64.b64encode((crc ^ 0xFFFFFFFF).to_bytes(4, 'big')).decode())
+        if received != size or provider_checksum != (item.get('md5Hash') or item.get('crc32c')):
+            raise RuntimeError('SOURCE_OBJECT_CHECKSUM_MISMATCH')
+        os.replace(temporary, path)
+        return sha.hexdigest(), False
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def mirror(storage, folder):
+    root = folder / 'archive'
+    root.mkdir(exist_ok=True, mode=0o700)
+    if root.is_symlink():
+        raise RuntimeError('SYMLINK_IN_ARCHIVE')
+    scan = uuid.uuid4().hex
+    count = reused = total_bytes = 0
+    checkpoint = folder / 'archive-checkpoints.sqlite'
+    if checkpoint.is_symlink():
+        raise RuntimeError('UNSAFE_CHECKPOINT_PATH')
+    with sqlite3.connect(checkpoint) as db, ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        checkpoint.chmod(0o600)
+        db.execute('CREATE TABLE IF NOT EXISTS objects (name TEXT PRIMARY KEY, generation TEXT, size INTEGER, sha TEXT, scan TEXT)')
+        for page in storage.pages():
+            # At most one small page/four streaming downloads resident at once.
+            pending = []
+            for item in page:
+                cached = db.execute('SELECT generation,size,sha FROM objects WHERE name=?', (item['name'],)).fetchone()
+                pending.append((item, pool.submit(download_one, storage, root, item, cached)))
+            for item, future in pending:
+                sha, skipped = future.result()
+                db.execute('INSERT OR REPLACE INTO objects VALUES (?,?,?,?,?)',
+                    (item['name'], str(item['generation']), int(item['size']), sha, scan))
+                db.commit()  # A browser/host interruption loses at most current downloads.
+                count += 1
+                reused += int(skipped)
+                total_bytes += int(item['size'])
+                if count % 50 == 0:
+                    print('ARCHIVE_COPY_PROGRESS', count, 'verified;', reused, 'reused;', total_bytes, 'bytes', flush=True)
+        if not count:
+            raise RuntimeError('EMPTY_SOURCE_ARCHIVE')
+        # Stream the manifest; exclude old local objects no longer in the source.
+        temporary = root / '.theta-manifest-new'
+        with temporary.open('w') as stream:
+            stream.write('{"source":"gs://' + BUCKET + '","objects":[')
+            first = True
+            for name, size, sha in db.execute('SELECT name,size,sha FROM objects WHERE scan=? ORDER BY name', (scan,)):
+                if not first:
+                    stream.write(',')
+                json.dump({'path': name, 'bytes': size, 'sha256': sha}, stream)
+                first = False
+            stream.write(']}')
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.chmod(0o600)
+        os.replace(temporary, root / 'migration-manifest.json')
+    print('ARCHIVE_DOWNLOAD_VERIFIED', count, 'objects', total_bytes, 'bytes;', reused, 'reused', flush=True)
+    return root

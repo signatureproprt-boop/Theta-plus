@@ -24,6 +24,26 @@ cd theta-unified-merge
 python3 personal-trading-phase1/deploy/merge_cloudshell.py
 ```
 
+For a tablet/browser that disconnects, use normal Cloud Shell (ephemeral mode off)
+and run `bash personal-trading-phase1/deploy/start_merge_cloudshell.sh` from the
+checkout. It performs authorization/SSH preflight interactively, then launches
+with nohup, private logs at `~/theta-merge.log`, and a singleton workspace lock.
+Browser disconnects do not terminate the detached process. A full Cloud Shell VM
+shutdown still does; rerunning reuses generation-matching, SHA-verified downloads
+from `~/.local/state/theta-unified-merge/archive`. Tokens stay in memory and are
+refreshed using the owner's existing gcloud login.
+
+Archive enumeration is paginated (200 objects), with four streaming downloads,
+provider MD5/CRC32C checks and a durable SQLite checkpoint after each verified
+object. The manifest and quiescent inventory digest stream without retaining the
+entire bucket listing in memory. A single compressed tar/SSH stream transfers the
+mirror to the VM. Source and stale local archive objects are never deleted; only
+objects in the current verified manifest are imported. Local disk exhaustion stops
+explicitly with checkpoints retained. Persistent Cloud Shell home storage remains
+limited: an archive exceeding available space requires a larger migration runner;
+do not delete market data to make room. No complete migration or coverage is claimed
+until the final handover checks pass.
+
 The script uses the existing VM and Cloud Shell identity. It does not create a second
 VM, change IAM, expose public database/Redis/API ports or delete source data. It adds
 a dedicated private Cloud Run subnet and restricts VM port 8000 to that source range. It first upgrades

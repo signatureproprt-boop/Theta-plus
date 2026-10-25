@@ -2,14 +2,11 @@
 
 No IAM changes, public ports, credential output, source deletion or commodity fixes.
 """
-import hashlib
 import json
-import os
 from pathlib import Path
 import re
 import shlex
 import subprocess
-import tempfile
 import time
 import uuid
 from urllib.request import urlopen
@@ -66,44 +63,46 @@ def set_fence(folder, value, generation):
     return current_fence()[1]
 
 
+def transfer_archive(mirror):
+    command = 'umask 077; mkdir -p ~/theta-merge-incoming && tar --no-same-owner --no-same-permissions -xzf - -C ~/theta-merge-incoming'
+    # gcloud/SSH diagnostics stay on stderr. The pipe contains owner archive bytes.
+    receiver = subprocess.Popen(['gcloud','compute','ssh',VM,'--zone='+ZONE,
+        '--project='+PROJECT,'--tunnel-through-iap','--ssh-flag=-T','--command='+command], stdin=subprocess.PIPE)
+    try:
+        sent = subprocess.run(['tar','-czf','-','-C',str(mirror.parent),mirror.name], stdout=receiver.stdin)
+        receiver.stdin.close()
+        received = receiver.wait()
+        if sent.returncode or received:
+            raise RuntimeError('ARCHIVE_VM_TRANSFER_FAILED; checkpoints retained for retry')
+    finally:
+        if receiver.poll() is None:
+            receiver.terminate()
+            receiver.wait()
+
+
 def inventory_digest():
-    listing = json.loads(cloud('storage','ls',BUCKET+'/**','--json',capture=True))
-    if not isinstance(listing,list): raise RuntimeError('UNSUPPORTED_STORAGE_INVENTORY_FORMAT')
-    canonical = sorted(json.dumps(row,sort_keys=True,separators=(',',':')) for row in listing)
-    return hashlib.sha256('\n'.join(canonical).encode()).hexdigest()
+    from archive_cloudshell import Storage, inventory_digest as streamed_digest
+    return streamed_digest(Storage(cloud))
 
 
 def mirror_and_import(folder, quiescent=False):
+    from archive_cloudshell import Storage, mirror as resumable_mirror
     before = inventory_digest() if quiescent else None
-    mirror = folder / 'archive'
-    mirror.mkdir(exist_ok=True)
-    print('ARCHIVE_DOWNLOAD_STARTED; duration depends on archive size',flush=True)
-    cloud('storage', 'rsync', '--recursive', BUCKET, str(mirror))
-    objects = []
-    for path in sorted(mirror.rglob('*')):
-        if path.is_dir(): continue
-        if path.is_symlink(): raise RuntimeError('SYMLINK_IN_ARCHIVE')
-        name = path.relative_to(mirror).as_posix()
-        if name == 'migration-manifest.json': continue
-        raw = path.read_bytes()
-        objects.append({'path': name, 'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()})
-    if not objects: raise RuntimeError('EMPTY_SOURCE_ARCHIVE')
-    print('ARCHIVE_DOWNLOAD_VERIFIED',len(objects),'objects',sum(o['bytes'] for o in objects),'bytes',flush=True)
-    (mirror / 'migration-manifest.json').write_text(json.dumps({'source': BUCKET, 'objects': objects}))
+    print('ARCHIVE_DOWNLOAD_STARTED; bounded pages, verified files resume after interruption',flush=True)
+    mirror = resumable_mirror(Storage(cloud), folder)
     # No deletion switches: final pass adds/replaces only owner-exported files.
     ssh('mkdir -p -m 700 ~/theta-merge-incoming')
     print('ARCHIVE_VM_TRANSFER_STARTED',flush=True)
-    cloud('compute', 'scp', '--recurse', str(mirror), VM+':~/theta-merge-incoming',
-          '--zone='+ZONE, '--tunnel-through-iap')
-    # SCP directory behaviour differs if destination exists: copy into a fresh,
-    # fixed-purpose transfer directory each pass, then use the known nested path.
+    # One streamed tar connection avoids SCP opening a network operation per object.
+    transfer_archive(mirror)
     user_home = ssh('printf %s "$HOME"', capture=True)
     remote('sudo', 'python3', '-c',
         "from pathlib import Path;import shutil,os,sys; "
         "src=Path(sys.argv[1])/'theta-merge-incoming'; "
         "src=src/'archive' if (src/'archive'/'migration-manifest.json').exists() else src; "
         "dst=Path('/srv/personal-trading/import');shutil.copytree(src,dst,dirs_exist_ok=True); "
-        "[(os.chown(p,10001,10001),os.chmod(p,0o700 if p.is_dir() else 0o600)) for p in [dst,*dst.rglob('*')]]", user_home)
+        "os.chown(dst,10001,10001);os.chmod(dst,0o700); "
+        "exec(\"for p in dst.rglob('*'):\n os.chown(p,10001,10001);os.chmod(p,0o700 if p.is_dir() else 0o600)\")", user_home)
     print('ARCHIVE_DATABASE_IMPORT_STARTED',flush=True)
     receipt = json.loads(api_module('app.merge_archive', 'import', '/legacy-import', capture=True).splitlines()[-1])
     print('ARCHIVE_DATABASE_IMPORT_RESULT',receipt.get('state'),receipt.get('objects'),flush=True)
@@ -136,9 +135,8 @@ def main():
     if old_marker.get('state') == 'FENCED':
         raise RuntimeError('PRIOR_HANDOVER_INTERRUPTED; inspect existing fence before replacing its owner')
     owner = uuid.uuid4().hex
-    with tempfile.TemporaryDirectory(prefix='theta-unified-') as temporary:
-        folder = Path(temporary)
-        folder.chmod(0o700)
+    from archive_cloudshell import workspace
+    with workspace() as folder:
         # Upgrade the old release manager first: new images include both source trees.
         cloud('compute', 'scp', str(ROOT/'personal-trading-phase1/deploy/auto_update.py'),
               VM+':~/theta-unified-updater.py', '--zone='+ZONE, '--tunnel-through-iap', capture=True)
@@ -160,6 +158,7 @@ def main():
             secure = folder/'legacy_admin_hash.txt';secure.write_text(admin_hash);secure.chmod(0o600)
             cloud('compute','scp',str(secure),VM+':~/theta-legacy-admin-hash.txt','--zone='+ZONE,'--tunnel-through-iap',capture=True)
             ssh('sudo cp ~/theta-legacy-admin-hash.txt /srv/personal-trading/secrets/legacy_admin_hash.txt && sudo chmod 0644 /srv/personal-trading/secrets/legacy_admin_hash.txt')
+            secure.unlink()
         with urlopen('https://theta-plus-jw4jpkebxa-el.a.run.app/api/migration/status', timeout=30) as response:
             capability=json.load(response)
             if capability.get('protocol') != 'unified-handover-v1' or capability.get('gateway') != 'private-vpc-v1':
