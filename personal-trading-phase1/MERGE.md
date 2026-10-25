@@ -33,7 +33,7 @@ shutdown still does; rerunning reuses generation-matching, SHA-verified download
 from `~/.local/state/theta-unified-merge/archive`. Tokens stay in memory and are
 refreshed using the owner's existing gcloud login.
 
-Archive enumeration is paginated (200 objects), with four streaming downloads,
+Archive enumeration is paginated (200 objects), with twelve streaming downloads,
 provider MD5/CRC32C checks and a durable SQLite checkpoint after each verified
 object. The manifest and quiescent inventory digest stream without retaining the
 entire bucket listing in memory. A single compressed tar/SSH stream transfers the
@@ -43,6 +43,21 @@ explicitly with checkpoints retained. Persistent Cloud Shell home storage remain
 limited: an archive exceeding available space requires a larger migration runner;
 do not delete market data to make room. No complete migration or coverage is claimed
 until the final handover checks pass.
+
+Each download worker reuses a verifying HTTPS connection pinned to the source GCS
+bucket host, avoiding a fresh TLS connection for each small file. Media redirects
+are rejected, partial/error responses discard their connections, and retries remain
+bounded. The copy log includes UTC timestamps and observed files/second. These
+changes affect archive transfer only; provider request gates remain in place.
+
+To upgrade an already running copy from the same checkout, pull the verified main
+revision and run `python3 personal-trading-phase1/deploy/upgrade_archive_runner.py`.
+It matches only the exact checkout's Python process, pauses it, checks that there
+are no active child commands and that the latest phase is archive-copy progress,
+then verifies the public source still reports LEGACY_BACKEND. If any check fails it
+resumes the existing process and defers the upgrade. It never interrupts database
+import or collector ownership handover. An accepted upgrade terminates the paused
+download and starts the new background runner with all verified checkpoints intact.
 
 The script uses the existing VM and Cloud Shell identity. It does not create a second
 VM, change IAM, expose public database/Redis/API ports or delete source data. It adds

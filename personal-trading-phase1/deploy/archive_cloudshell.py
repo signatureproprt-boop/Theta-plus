@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 import fcntl
 import hashlib
-from http.client import IncompleteRead
+from http.client import HTTPException, HTTPSConnection, IncompleteRead
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -17,7 +17,7 @@ import sqlite3
 import threading
 import time
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 import uuid
 
@@ -25,7 +25,55 @@ BUCKET = 'theta-pluse-theta-plus-data'
 MAX_OBJECT_BYTES = 256 * 1024**2
 DISK_RESERVE = 256 * 1024**2
 PAGE_SIZE = 200
-WORKERS = 4
+WORKERS = 12
+
+
+class MediaResponse:
+    """Release a fully consumed response; discard connections on partial reads."""
+    def __init__(self, response, connection):
+        self.response, self.connection = response, connection
+        self.status = response.status
+
+    def read(self, *args):
+        try:
+            return self.response.read(*args)
+        except BaseException:
+            self.connection.close()
+            raise
+
+    def close(self):
+        if not self.response.isclosed():
+            self.connection.close()
+        self.response.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+
+class MediaConnections:
+    """One verified-TLS connection per worker, pinned to the GCS host."""
+    def __init__(self):
+        self.local = threading.local()
+
+    def open(self, url, headers):
+        target = urlsplit(url)
+        if (target.scheme != 'https' or target.netloc != 'storage.googleapis.com' or
+                target.fragment or not target.path.startswith('/storage/v1/b/' + BUCKET + '/o/')):
+            raise RuntimeError('UNEXPECTED_STORAGE_MEDIA_DESTINATION')
+        connection = getattr(self.local, 'connection', None)
+        if connection is None:
+            # HTTPSConnection uses a default verifying SSL context; never disables TLS.
+            connection = self.local.connection = HTTPSConnection('storage.googleapis.com', timeout=45)
+        path = target.path + ('?' + target.query if target.query else '')
+        try:
+            connection.request('GET', path, headers=headers)
+            return MediaResponse(connection.getresponse(), connection)
+        except BaseException:
+            connection.close()
+            raise
 
 
 @contextmanager
@@ -72,6 +120,7 @@ class Storage:
         self.token = None
         self.token_at = 0
         self.lock = threading.Lock()
+        self.media_connections = MediaConnections()
 
     def access_token(self, force=False):
         with self.lock:
@@ -83,11 +132,19 @@ class Storage:
     def open(self, url, raw=False):
         for attempt in range(4):
             try:
-                return urlopen(Request(url, headers={
+                headers = {
                     'Authorization': 'Bearer ' + self.access_token(),
                     # Prevent transparent GCS gzip decompression: preserve source bytes.
                     'Accept-Encoding': 'gzip' if raw else 'identity',
-                }), timeout=45)
+                }
+                if raw:
+                    response = self.media_connections.open(url, headers)
+                    if response.status != 200:
+                        code = response.status
+                        response.close()
+                        raise HTTPError(url, code, 'Storage media response', {}, None)
+                    return response
+                return urlopen(Request(url, headers=headers), timeout=45)
             except HTTPError as exc:
                 code = exc.code
                 exc.close()
@@ -96,7 +153,7 @@ class Storage:
                     continue
                 if code not in (408, 429, 500, 502, 503, 504) or attempt == 3:
                     raise RuntimeError('STORAGE_HTTP_' + str(code)) from None
-            except (URLError, TimeoutError):
+            except (URLError, OSError, HTTPException):
                 if attempt == 3:
                     raise RuntimeError('STORAGE_NETWORK_RETRIES_EXHAUSTED') from None
             time.sleep(2**attempt)
@@ -166,7 +223,7 @@ def download_one(storage, root, item, cached):
         return cached[2], True
     if not item.get('md5Hash') and not item.get('crc32c'):
         raise RuntimeError('SOURCE_CHECKSUM_MISSING')
-    if shutil.disk_usage(root).free < DISK_RESERVE + MAX_OBJECT_BYTES * WORKERS:
+    if shutil.disk_usage(root).free < DISK_RESERVE + size * WORKERS:
         raise RuntimeError('ARCHIVE_LOCAL_DISK_LOW; source retained; do not delete trading data')
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     temporary = path.parent / ('.theta-download-' + uuid.uuid4().hex)
@@ -213,6 +270,8 @@ def mirror(storage, folder):
         raise RuntimeError('SYMLINK_IN_ARCHIVE')
     scan = uuid.uuid4().hex
     count = reused = total_bytes = 0
+    started = time.monotonic()
+    print('ARCHIVE_TRANSFER_MODE', WORKERS, 'workers; persistent HTTPS connections', flush=True)
     checkpoint = folder / 'archive-checkpoints.sqlite'
     if checkpoint.is_symlink():
         raise RuntimeError('UNSAFE_CHECKPOINT_PATH')
@@ -234,7 +293,10 @@ def mirror(storage, folder):
                 reused += int(skipped)
                 total_bytes += int(item['size'])
                 if count % 50 == 0:
-                    print('ARCHIVE_COPY_PROGRESS', count, 'verified;', reused, 'reused;', total_bytes, 'bytes', flush=True)
+                    elapsed = max(time.monotonic() - started, 0.001)
+                    print('ARCHIVE_COPY_PROGRESS', count, 'verified;', reused, 'reused;', total_bytes,
+                        'bytes;', round(count / elapsed, 1), 'files/s;',
+                        time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), flush=True)
         if not count:
             raise RuntimeError('EMPTY_SOURCE_ARCHIVE')
         # Stream the manifest; exclude old local objects no longer in the source.

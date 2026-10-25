@@ -228,3 +228,195 @@ def test_streamed_truncated_download_is_retried_from_start(tmp_path, monkeypatch
     module.download_one(source, tmp_path, item('a', b'complete'), None)
     assert len(attempts) == 2
     assert (tmp_path/'a').read_bytes() == b'complete'
+
+
+def test_worker_reuses_media_connection_and_closes_partial_reads(monkeypatch):
+    created = []
+    class Response(BytesIO):
+        status = 200
+        def isclosed(self):
+            return self.tell() == len(self.getvalue())
+    class Connection:
+        def __init__(self, host, **kwargs):
+            assert host == 'storage.googleapis.com' and kwargs == {'timeout': 45}
+            self.requests = []
+            self.closed = False
+            created.append(self)
+        def request(self, *args, **kwargs):
+            self.requests.append((args, kwargs))
+        def getresponse(self):
+            return Response(b'body')
+        def close(self):
+            self.closed = True
+    monkeypatch.setattr(module, 'HTTPSConnection', Connection)
+    transport = module.MediaConnections()
+    url = 'https://storage.googleapis.com/storage/v1/b/' + module.BUCKET + '/o/a?generation=1'
+    for _ in range(3):
+        with transport.open(url, {'Authorization':'Bearer test'}) as response:
+            assert response.read() == b'body'
+    assert len(created) == 1 and len(created[0].requests) == 3 and not created[0].closed
+    with transport.open(url, {}) as response:
+        assert response.read(1) == b'b'
+    assert created[0].closed
+
+
+@pytest.mark.parametrize('url', [
+    'http://storage.googleapis.com/storage/v1/b/theta-pluse-theta-plus-data/o/a',
+    'https://other.example/storage/v1/b/theta-pluse-theta-plus-data/o/a',
+    'https://storage.googleapis.com/storage/v1/b/another-bucket/o/a',
+    'https://storage.googleapis.com@other.example/storage/v1/b/theta-pluse-theta-plus-data/o/a',
+])
+def test_media_connection_never_sends_token_to_other_destination(url, monkeypatch):
+    from unittest.mock import Mock
+    opened = Mock()
+    monkeypatch.setattr(module, 'HTTPSConnection', opened)
+    with pytest.raises(RuntimeError, match='DESTINATION'):
+        module.MediaConnections().open(url, {'Authorization':'Bearer test'})
+    opened.assert_not_called()
+
+
+def test_media_http_errors_retry_without_following_redirects(monkeypatch):
+    from unittest.mock import Mock
+    storage = module.Storage(lambda *a, **k: 'token')
+    response = Mock(status=302)
+    storage.media_connections.open = Mock(return_value=response)
+    with pytest.raises(RuntimeError, match='^STORAGE_HTTP_302$'):
+        storage.media(item('a', b'a'))
+    response.close.assert_called_once()
+    assert storage.media_connections.open.call_count == 1
+
+
+def test_media_connection_is_thread_local(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    created = []
+    class Connection:
+        def __init__(self, *args, **kwargs):
+            created.append(self)
+        def request(self, *args, **kwargs):
+            pass
+        def getresponse(self):
+            from unittest.mock import Mock
+            return Mock(status=200, isclosed=lambda: True)
+    monkeypatch.setattr(module, 'HTTPSConnection', Connection)
+    transport = module.MediaConnections()
+    barrier = Barrier(2)
+    def work():
+        for _ in range(2):
+            with transport.open('https://storage.googleapis.com/storage/v1/b/'+module.BUCKET+'/o/a', {}):
+                pass
+            barrier.wait(timeout=5)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(work) for _ in range(2)]
+        for f in futures:
+            f.result()
+    assert len(created) == 2
+
+
+def upgrade_module():
+    spec = importlib.util.spec_from_file_location('upgrade_download', Path(__file__).parents[1]/'deploy/upgrade_archive_runner.py')
+    result = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(result)
+    return result
+
+
+@pytest.mark.parametrize('line,expected', [
+    ('ARCHIVE_COPY_PROGRESS 400 verified; 200 reused', True),
+    ('ARCHIVE_DATABASE_IMPORT_STARTED', False),
+    ('MERGE_STAGE_2_FENCE_AND_STOP_PREVIOUS_COLLECTOR', False),
+    ('ARCHIVE_DOWNLOAD_VERIFIED 400', False),
+])
+def test_upgrade_only_accepts_download_phase(tmp_path, line, expected):
+    owner = upgrade_module()
+    log = tmp_path/'log'
+    log.write_text('earlier stage\n'+line+'\n')
+    assert owner.download_phase(log) is expected
+
+
+def test_upgrade_resumes_existing_process_if_handover_state_blocks(monkeypatch):
+    owner = upgrade_module()
+    signals = []
+    monkeypatch.setattr(owner, 'has_children', lambda _: False)
+    monkeypatch.setattr(owner, 'download_phase', lambda _: True)
+    monkeypatch.setattr(owner, 'urlopen', lambda *a, **k: BytesIO(b'{"protocol":"unified-handover-v1","state":"FENCED"}'))
+    monkeypatch.setattr(owner, 'signal_pid', lambda pid, kind: signals.append(kind))
+    with pytest.raises(RuntimeError, match='HANDOVER_STATE'):
+        owner.stop_download(123)
+    assert signals == [owner.signal.SIGSTOP, owner.signal.SIGCONT]
+    assert owner.signal.SIGTERM not in signals
+
+
+def test_upgrade_stops_only_test_owned_download_and_keeps_checkpoint(tmp_path, monkeypatch):
+    import subprocess
+    import sys
+    owner = upgrade_module()
+    log = tmp_path/'log'
+    log.write_text('ARCHIVE_COPY_PROGRESS 100 verified; 100 reused\n')
+    checkpoint = tmp_path/'checkpoint'
+    checkpoint.write_text('retain')
+    monkeypatch.setattr(owner, 'LOG', log)
+    # Some managed test runtimes expose child handles but hide their /proc view.
+    monkeypatch.setattr(owner, 'has_children', lambda _: False)
+    monkeypatch.setattr(owner, 'urlopen', lambda *a, **k: BytesIO(b'{"protocol":"unified-handover-v1","state":"LEGACY_BACKEND"}'))
+    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+    try:
+        owner.stop_download(child.pid)
+        assert child.wait(timeout=5) == -owner.signal.SIGTERM
+        assert checkpoint.read_text() == 'retain'
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait()
+
+
+def test_upgrade_checks_children_of_every_download_thread(tmp_path):
+    owner = upgrade_module()
+    for thread in ('100', '101'):
+        root = tmp_path/'100/task'/thread
+        root.mkdir(parents=True)
+        (root/'children').write_text('')
+    assert not owner.has_children(100, tmp_path)
+    (tmp_path/'100/task/101/children').write_text('200')
+    assert owner.has_children(100, tmp_path)
+
+
+def test_real_http_stream_reuses_connection_for_multiple_objects(monkeypatch):
+    from http.client import HTTPConnection
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import threading
+    connections = []
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = 'HTTP/1.1'
+        def setup(self):
+            super().setup()
+            connections.append(self.connection)
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header('Content-Length', '4')
+            self.end_headers()
+            self.wfile.write(b'body')
+        def log_message(self, *args):
+            pass
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    clients = []
+    def client(*args, **kwargs):
+        result = HTTPConnection('127.0.0.1', server.server_port, timeout=5)
+        clients.append(result)
+        return result
+    monkeypatch.setattr(module, 'HTTPSConnection', client)
+    storage = module.Storage(lambda *a, **k: 'test-only-token')
+    try:
+        for _ in range(4):
+            with storage.media(item('a', b'body')) as response:
+                assert response.read(2) == b'bo'
+                assert response.read(2) == b'dy'
+                assert response.read(2) == b''
+        assert len(connections) == len(clients) == 1
+    finally:
+        for result in clients:
+            result.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
