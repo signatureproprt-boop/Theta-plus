@@ -14,7 +14,7 @@ import time
 import uuid
 from urllib.request import urlopen
 
-from archive_cloudshell import workspace
+from archive_cloudshell import workspace, file_sha
 from auto_update import verified
 from merge_cloudshell import (cloud, ssh, remote, run, current_fence, PROJECT,
                               ZONE, VM, ROOT, api_module)
@@ -104,24 +104,34 @@ def seed_cache(folder):
         for directory, directories, files in os.walk(archive, followlinks=False):
             if any((Path(directory)/name).is_symlink() for name in directories + files):
                 raise RuntimeError('SYMLINK_IN_SEED_ARCHIVE')
-        command = ('sudo flock -n '+REMOTE_STATE+'/run.lock sh -c ' + shlex.quote(
-            'tar --no-same-owner --no-same-permissions -xzf - -C '+REMOTE_STATE+
-            ' && chown -R 10001:10001 '+REMOTE_STATE+
-            ' && chmod -R u=rwX,go= '+REMOTE_STATE))
-        print('VM_CACHE_SEED_STARTED; existing verified bytes copied once', flush=True)
-        receiver = subprocess.Popen(['gcloud','compute','ssh',VM,'--zone='+ZONE,
-            '--project='+PROJECT,'--tunnel-through-iap','--ssh-flag=-T','--command='+command], stdin=subprocess.PIPE)
+        # Stage one regular file instead of piping tar through the gcloud/IAP
+        # wrapper's stdin. A closed receiver must not discard the cache transfer.
+        package = Path(temporary)/'theta-archive-seed.tar.gz'
+        print('VM_CACHE_SEED_PACKING; source cache retained', flush=True)
+        with package.open('xb') as output:
+            package.chmod(0o600)
+            subprocess.run(['tar','-czf','-','-C',temporary,checkpoint.name,
+                            '-C',str(folder),'archive'], stdout=output, check=True)
+        print('VM_CACHE_SEED_UPLOAD', package.stat().st_size, 'compressed bytes', flush=True)
+        cloud('compute','scp',str(package),VM+':~/theta-archive-seed.tar.gz',
+              '--zone='+ZONE,'--tunnel-through-iap')
+        uploaded = ssh('sha256sum ~/theta-archive-seed.tar.gz', capture=True).split()
+        if not uploaded or uploaded[0] != file_sha(package):
+            raise RuntimeError('VM_CACHE_SEED_CHECKSUM_MISMATCH; local cache retained')
+        home = ssh('printf %s "$HOME"', capture=True)
+        seed = shlex.quote(home+'/theta-archive-seed.tar.gz')
+        print('VM_CACHE_SEED_EXTRACTING; upload checksum verified', flush=True)
         try:
-            sent = subprocess.run(['tar','-czf','-','-C',temporary,checkpoint.name,
-                                   '-C',str(folder),'archive'], stdout=receiver.stdin)
-            receiver.stdin.close()
-            code = receiver.wait()
-            if sent.returncode or code:
-                raise RuntimeError('VM_CACHE_SEED_INTERRUPTED; local cache retained')
-        finally:
-            if receiver.poll() is None:
-                receiver.terminate()
-                receiver.wait()
+            remote('sudo','flock','-n','-E','75',REMOTE_STATE+'/run.lock','sh','-c',
+                   'tar --no-same-owner --no-same-permissions -xzf '+seed+' -C '+REMOTE_STATE+
+                   ' && chown -R 10001:10001 '+REMOTE_STATE+
+                   ' && chmod -R u=rwX,go= '+REMOTE_STATE)
+        except subprocess.CalledProcessError as error:
+            raise RuntimeError('VM_CACHE_SEED_EXTRACT_FAILED; exit='+str(error.returncode)+
+                               '; local cache retained; do not delete checkpoints') from None
+        # Delete only the temporary uploaded package, after successful extraction.
+        ssh('rm -- '+seed)
+        print('VM_CACHE_SEED_COMPLETE; cached objects will be SHA-verified before reuse', flush=True)
 
 
 def install(folder):

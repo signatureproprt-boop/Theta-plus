@@ -263,3 +263,60 @@ def test_owner_import_consumes_vm_archive_without_cloudshell_download(installer,
     monkeypatch.setattr(owner, 'api_module', lambda *a, **kw: '{"state":"VERIFIED","objects":42}')
     assert owner.mirror_and_import(tmp_path, quiescent=True)['state'] == 'VERIFIED'
     assert calls[0][-1] == '/srv/personal-trading/archive-worker/archive'
+
+
+def test_seed_uses_one_checked_scp_file_and_preserves_cache(installer, monkeypatch, tmp_path):
+    import sqlite3
+    import tarfile
+    import shutil
+    folder = tmp_path/'local'
+    folder.mkdir()
+    (folder/'archive').mkdir()
+    (folder/'archive/object.json').write_bytes(b'original source bytes')
+    with sqlite3.connect(folder/'archive-checkpoints.sqlite') as db:
+        db.execute('CREATE TABLE objects (name TEXT)')
+        db.execute('INSERT INTO objects VALUES (?)', ('object.json',))
+    upload = tmp_path/'upload.tar.gz'
+    calls = []
+    def cloud(*args, **kwargs):
+        calls.append(args)
+        assert args[:2] == ('compute','scp')
+        shutil.copyfile(args[2], upload)
+    def ssh(command, **kwargs):
+        calls.append(command)
+        if command.startswith('sha256sum'):
+            return installer.file_sha(upload)+'  seed.tar.gz'
+        if command.startswith('printf'):
+            return '/home/owner with spaces'
+        assert command == "rm -- '/home/owner with spaces/theta-archive-seed.tar.gz'"
+    def remote(*args, **kwargs):
+        calls.append(args)
+        assert args[:5] == ('sudo','flock','-n','-E','75')
+        assert "-xzf '/home/owner with spaces/theta-archive-seed.tar.gz'" in args[-1]
+        with tarfile.open(upload, 'r:gz') as tar:
+            assert set(tar.getnames()) == {'archive-checkpoints.sqlite','archive','archive/object.json'}
+            assert tar.extractfile('archive/object.json').read() == b'original source bytes'
+            snapshot = tmp_path/'snapshot.sqlite'
+            snapshot.write_bytes(tar.extractfile('archive-checkpoints.sqlite').read())
+        with sqlite3.connect(snapshot) as db:
+            assert db.execute('SELECT name FROM objects').fetchone()[0] == 'object.json'
+    monkeypatch.setattr(installer,'cloud',cloud)
+    monkeypatch.setattr(installer,'ssh',ssh)
+    monkeypatch.setattr(installer,'remote',remote)
+    installer.seed_cache(folder)
+    assert (folder/'archive/object.json').read_bytes() == b'original source bytes'
+    assert sum(isinstance(c,tuple) and c[:2] == ('compute','scp') for c in calls) == 1
+
+
+def test_seed_upload_corruption_blocks_privileged_extraction(installer, monkeypatch, tmp_path):
+    import sqlite3
+    (tmp_path/'archive').mkdir()
+    (tmp_path/'archive/a').write_bytes(b'cache')
+    with sqlite3.connect(tmp_path/'archive-checkpoints.sqlite') as db:
+        db.execute('CREATE TABLE objects (name TEXT)')
+    monkeypatch.setattr(installer,'cloud',lambda *a,**kw: None)
+    monkeypatch.setattr(installer,'ssh',lambda *a,**kw: 'badsha  upload')
+    monkeypatch.setattr(installer,'remote',lambda *a,**kw: pytest.fail('Must not extract corrupt upload'))
+    with pytest.raises(RuntimeError,match='VM_CACHE_SEED_CHECKSUM_MISMATCH'):
+        installer.seed_cache(tmp_path)
+    assert (tmp_path/'archive/a').read_bytes() == b'cache'

@@ -166,8 +166,10 @@ VM services. The public legacy service continues to serve its existing URL.
 This is an explicit exception to the original identity-free VM design; the
 ordinary handover script still makes no IAM changes.
 
-Cached Cloud Shell files and a consistent SQLite backup are seeded to
-`/srv/personal-trading/archive-worker` over one compressed IAP stream. Nothing is
+Cached Cloud Shell files and a consistent SQLite backup are packed into one
+protected temporary archive and uploaded with SCP over IAP. Its SHA-256 is checked
+before locked extraction into `/srv/personal-trading/archive-worker`. This avoids
+feeding binary tar bytes into the gcloud SSH wrapper's stdin. Nothing is
 deleted from Cloud Shell or GCS. A failed seed leaves the original cache intact;
 rerunning the installer can retry it. The worker revalidates generation, size
 and SHA before reuse. GCS downloads retain the provider checksum validation.
