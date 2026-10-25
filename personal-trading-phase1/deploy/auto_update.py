@@ -44,19 +44,33 @@ def compose(release, sha, *args, capture=False):
                '-f', 'compose.vps.yaml', *args, cwd=release, env=env, capture=capture)
 
 
-def healthy(release, sha):
+def app_services(release, sha, require_live=False):
+    configured = set(compose(release, sha, 'config', '--services', capture=True).split())
+    required = {'api', 'worker', 'dispatcher'}
+    if require_live:
+        required.add('live')
+    if not required <= configured:
+        raise RuntimeError('RELEASE_MISSING_REQUIRED_SERVICES: ' + ','.join(sorted(required-configured)))
+    return tuple(s for s in ('api', 'worker', 'dispatcher', 'live') if s in configured)
+
+
+def healthy(release, sha, require_live=False):
+    services = app_services(release, sha, require_live=require_live)
     image = run('docker', 'image', 'inspect', 'personal-trading-phase1:' + sha, '--format={{.Id}}', capture=True)
-    for _ in range(60):
+    for attempt in range(60):
         try:
-            for service in ('api', 'worker', 'dispatcher', 'live'):
+            for service in services:
                 cid = compose(release, sha, 'ps', '-q', service, capture=True)
                 if not cid or run('docker', 'inspect', cid, '--format={{.State.Running}} {{.Image}}', capture=True) != 'true ' + image:
-                    raise RuntimeError('Release container not active')
+                    raise RuntimeError('Release container not active: ' + service)
             compose(release, sha, 'exec', '-T', 'api', 'python', '-c',
                     "import httpx; r=httpx.get('http://127.0.0.1:8000/health/ready',timeout=10);r.raise_for_status()")
             compose(release, sha, 'exec', '-T', 'worker', 'celery', '-A', 'app.celery_app:celery_app', 'inspect', 'ping', '--timeout=10')
             return True
-        except (subprocess.CalledProcessError, RuntimeError):
+        except (subprocess.CalledProcessError, RuntimeError) as error:
+            if attempt in (0, 59):
+                print('RELEASE_READINESS_WAIT', sha, type(error).__name__,
+                      str(error) if isinstance(error, RuntimeError) else 'readiness command failed', flush=True)
             time.sleep(5)
     return False
 
@@ -119,6 +133,8 @@ def main(revision=None):
         incoming.mkdir(mode=0o700, exist_ok=True)
         os.chown(incoming, 10001, 10001)
         compose(release, candidate, 'config', '--quiet')
+        # Reject an incomplete new release immediately, before altering containers.
+        app_services(release, candidate, require_live=True)
         compose(release, candidate, 'build', 'api')
         if previous and state.get('sha'):
             backup_dir = ROOT / 'backups'
@@ -132,11 +148,25 @@ def main(revision=None):
             if not backup.stat().st_size:
                 raise RuntimeError('Empty backup; deployment stopped')
         try:
+            print('CANDIDATE_STARTING', candidate, flush=True)
             compose(release, candidate, 'up', '-d', '--no-build')
-            if not healthy(release, candidate):
+            if not healthy(release, candidate, require_live=True):
                 raise RuntimeError('Candidate readiness failed')
-        except Exception:
+        except Exception as error:
+            # Retain the original failure even if a rollback check subsequently fails.
+            failure = ROOT / 'last-deploy-failure.json'
+            failure.write_text(json.dumps({'candidate': candidate, 'previous': state.get('sha'),
+                'error_type': type(error).__name__, 'stage': 'candidate_start_or_readiness',
+                'checked_at': datetime.now(timezone.utc).isoformat()}))
+            failure.chmod(0o600)
+            print('CANDIDATE_FAILED', candidate, type(error).__name__, flush=True)
             if previous and state.get('sha'):
+                # A pre-live release has only api/worker/dispatcher. Stop just the
+                # candidate services absent from it, then verify its own service set.
+                introduced = sorted(set(app_services(release, candidate)) -
+                                    set(app_services(previous, state['sha'])))
+                if introduced:
+                    compose(release, candidate, 'stop', *introduced)
                 compose(previous, state['sha'], 'up', '-d', '--no-build')
                 if not healthy(previous, state['sha']):
                     raise RuntimeError('Rollback requires operator review') from None
