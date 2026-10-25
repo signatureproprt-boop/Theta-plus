@@ -77,7 +77,8 @@ def mirror_and_import(folder, quiescent=False):
     before = inventory_digest() if quiescent else None
     mirror = folder / 'archive'
     mirror.mkdir(exist_ok=True)
-    cloud('storage', 'rsync', '--recursive', BUCKET, str(mirror), capture=True)
+    print('ARCHIVE_DOWNLOAD_STARTED; duration depends on archive size',flush=True)
+    cloud('storage', 'rsync', '--recursive', BUCKET, str(mirror))
     objects = []
     for path in sorted(mirror.rglob('*')):
         if path.is_dir(): continue
@@ -87,11 +88,13 @@ def mirror_and_import(folder, quiescent=False):
         raw = path.read_bytes()
         objects.append({'path': name, 'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()})
     if not objects: raise RuntimeError('EMPTY_SOURCE_ARCHIVE')
+    print('ARCHIVE_DOWNLOAD_VERIFIED',len(objects),'objects',sum(o['bytes'] for o in objects),'bytes',flush=True)
     (mirror / 'migration-manifest.json').write_text(json.dumps({'source': BUCKET, 'objects': objects}))
     # No deletion switches: final pass adds/replaces only owner-exported files.
     ssh('mkdir -p -m 700 ~/theta-merge-incoming')
+    print('ARCHIVE_VM_TRANSFER_STARTED',flush=True)
     cloud('compute', 'scp', '--recurse', str(mirror), VM+':~/theta-merge-incoming',
-          '--zone='+ZONE, '--tunnel-through-iap', capture=True)
+          '--zone='+ZONE, '--tunnel-through-iap')
     # SCP directory behaviour differs if destination exists: copy into a fresh,
     # fixed-purpose transfer directory each pass, then use the known nested path.
     user_home = ssh('printf %s "$HOME"', capture=True)
@@ -101,7 +104,9 @@ def mirror_and_import(folder, quiescent=False):
         "src=src/'archive' if (src/'archive'/'migration-manifest.json').exists() else src; "
         "dst=Path('/srv/personal-trading/import');shutil.copytree(src,dst,dirs_exist_ok=True); "
         "[(os.chown(p,10001,10001),os.chmod(p,0o700 if p.is_dir() else 0o600)) for p in [dst,*dst.rglob('*')]]", user_home)
+    print('ARCHIVE_DATABASE_IMPORT_STARTED',flush=True)
     receipt = json.loads(api_module('app.merge_archive', 'import', '/legacy-import', capture=True).splitlines()[-1])
+    print('ARCHIVE_DATABASE_IMPORT_RESULT',receipt.get('state'),receipt.get('objects'),flush=True)
     if quiescent and inventory_digest() != before:
         raise RuntimeError('SOURCE_CHANGED_DURING_FINAL_IMPORT; source retained, handover deferred')
     return receipt

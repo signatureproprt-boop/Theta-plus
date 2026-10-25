@@ -11,6 +11,33 @@ CIDR='172.31.240.0/24'
 TARGET_TAG='personal-trading-phase1-iap'
 
 
+def existing_gateway_network(service, project, region, ip):
+    """Resume only our exact private gateway template; reject unrelated networks."""
+    template=service['spec']['template']
+    annotations=template.get('metadata',{}).get('annotations',{})
+    raw=annotations.get('run.googleapis.com/network-interfaces')
+    if annotations.get('run.googleapis.com/vpc-access-connector'):
+        raise RuntimeError('EXISTING_FRONTEND_NETWORK_REQUIRES_REVIEW; connector retained')
+    if not raw:
+        return False
+    def resource_matches(value, short, path):
+        return value in (short,path,'https://www.googleapis.com/compute/v1/'+path)
+    try:
+        interfaces=json.loads(raw)
+        interface=interfaces[0]
+        valid=(len(interfaces)==1 and set(interface)<= {'network','subnetwork'} and
+            resource_matches(interface.get('network'),'default',f'projects/{project}/global/networks/default') and
+            resource_matches(interface.get('subnetwork'),SUBNET,f'projects/{project}/regions/{region}/subnetworks/{SUBNET}') and
+            annotations.get('run.googleapis.com/vpc-access-egress')=='private-ranges-only')
+    except (ValueError,TypeError,KeyError,IndexError):
+        valid=False
+    env=template.get('spec',{}).get('containers',[{}])[0].get('env',[])
+    upstream=[e for e in env if e.get('name')=='THETA_UNIFIED_UPSTREAM']
+    if not valid or upstream!=[{'name':'THETA_UNIFIED_UPSTREAM','value':'http://'+ip+':8000'}]:
+        raise RuntimeError('EXISTING_FRONTEND_NETWORK_REQUIRES_REVIEW; no network settings replaced')
+    return True
+
+
 def validate_rule(rule, action, source, priority):
     expected='allowed' if action=='ALLOW' else 'denied'
     if not (rule.get('network','').rsplit('/',1)[-1]=='default' and
@@ -25,6 +52,7 @@ class GatewayHandover:
         self.cloud,self.remote,self.ssh=cloud,remote,ssh
         self.project,self.region,self.zone,self.vm=project,region,zone,vm
         self.baseline=None;self.promoted=False;self.candidate=None;self.template_changed=False
+        self.reused_network=False
 
     def service(self):
         return json.loads(self.cloud('run','services','describe','theta-plus','--region='+self.region,'--format=json',capture=True))
@@ -36,15 +64,15 @@ class GatewayHandover:
     def prepare(self):
         print('MERGE_GATEWAY_PRIVATE_NETWORK_PREPARE',flush=True)
         self.baseline=self.service()
-        annotations=self.baseline['spec']['template']['metadata'].get('annotations',{})
-        if annotations.get('run.googleapis.com/network-interfaces') or annotations.get('run.googleapis.com/vpc-access-connector'):
-            raise RuntimeError('EXISTING_FRONTEND_NETWORK_REQUIRES_REVIEW; no network settings replaced')
         vm=json.loads(self.cloud('compute','instances','describe',self.vm,'--zone='+self.zone,'--format=json',capture=True))
         interface=vm['networkInterfaces'][0]
         if interface['network'].rsplit('/',1)[-1]!='default' or TARGET_TAG not in vm.get('tags',{}).get('items',[]):
             raise RuntimeError('UNEXPECTED_VM_NETWORK_OR_TAG')
         ip=str(ipaddress.IPv4Address(interface['networkIP']))
         if not ipaddress.ip_address(ip).is_private: raise RuntimeError('PRIVATE_BACKEND_IP_REQUIRED')
+        self.reused_network=existing_gateway_network(self.baseline,self.project,self.region,ip)
+        if self.reused_network:
+            print('EXISTING_PRIVATE_GATEWAY_CONFIGURATION_VERIFIED_FOR_RETRY',flush=True)
         subnets=json.loads(self.cloud('compute','networks','subnets','list','--network=default','--format=json',capture=True))
         existing=next((s for s in subnets if s['name']==SUBNET and s['region'].rsplit('/',1)[-1]==self.region),None)
         if existing:
@@ -135,6 +163,8 @@ class GatewayHandover:
             current=self.service()
             if any(t.get('tag')=='unified-check' and t.get('revisionName')==self.candidate for t in current['status']['traffic']):
                 self.cloud('run','services','update-traffic','theta-plus','--region='+self.region,'--remove-tags=unified-check','--quiet',capture=True)
-            # Previous network was verified absent before creating the candidate.
-            self.cloud('run','services','update','theta-plus','--region='+self.region,'--clear-network',
-                '--remove-env-vars=THETA_UNIFIED_UPSTREAM','--no-traffic','--quiet',capture=True)
+            # A retry starts with the already verified same private configuration.
+            # Preserve that baseline; clear only settings introduced by this run.
+            if not self.reused_network:
+                self.cloud('run','services','update','theta-plus','--region='+self.region,'--clear-network',
+                    '--remove-env-vars=THETA_UNIFIED_UPSTREAM','--no-traffic','--quiet',capture=True)
