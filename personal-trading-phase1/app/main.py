@@ -240,6 +240,9 @@ def market_coverage(exchange_segment: str, security_id: str, start: date, end: d
 from app.live_api import install as install_live_routes
 install_live_routes(app, protected)
 
+from app.index_analysis import install as install_index_analysis
+install_index_analysis(app, protected)
+
 
 if settings().unified_workspace:
     from app.unified import mount_workspace
