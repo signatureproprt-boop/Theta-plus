@@ -30,3 +30,13 @@
 #page-research a{color:#8bc9ff}
 @media(max-width:1200px){#page-research .research-layout{grid-template-columns:1fr}#page-research .research-aside{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}#page-research .research-aside>*{min-width:0}}
 @media(max-width:760px){#page-research .room-workbench{grid-template-columns:1fr}#page-research .analysis-tabs{display:flex;overflow-x:auto}#page-research .analysis-tabs button{flex:0 0 95px;min-height:44px}#page-research .research-aside{grid-template-columns:1fr}#page-research .room-chart #research-chart.price-action-chart{height:350px}}
+
+/* Keep the Trading Room focused on chart, option chain and analysis. */
+body:has(#page-research:not([hidden])) .terminal-watch{display:none}
+body:has(#page-research:not([hidden])) main{margin-left:0}
+#page-research .research-layout{grid-template-columns:minmax(0,1fr)}
+#page-research .research-aside{display:block}
+#page-research .research-aside > :not(#research-data-validator){display:none}
+#page-research .room-workbench{grid-template-columns:minmax(0,58fr) minmax(0,42fr)}
+#page-research .chain-atm th,#page-research .chain-atm td{background:#594a17}
+@media(max-width:760px){#page-research .room-workbench{grid-template-columns:1fr}}
