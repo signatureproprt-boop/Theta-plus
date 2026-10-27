@@ -40,3 +40,5 @@ body:has(#page-research:not([hidden])) main{margin-left:0}
 #page-research .room-workbench{grid-template-columns:minmax(0,58fr) minmax(0,42fr)}
 #page-research .chain-atm th,#page-research .chain-atm td{background:#594a17}
 @media(max-width:760px){#page-research .room-workbench{grid-template-columns:1fr}}
+
+body:has(#page-research:not([hidden])) #desk-market-watch{display:none}
