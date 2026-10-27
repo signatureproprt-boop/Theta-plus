@@ -123,6 +123,28 @@ def indicators(candles,clock):
     from indicator_engine import build
     return {key: value['snapshot'] for key,value in build(candles,clock)['frames'].items()}
 
+def returned_strike_max_pain(rows, expiry):
+    """OI-weighted intrinsic payout for returned strikes; completeness is not certified."""
+    if not expiry or not rows:
+        return None
+    grouped = {}
+    for row in rows:
+        strike, oi, side = number(row.get('strike')), number(row.get('oi')), row.get('side')
+        if row.get('expiry') != expiry or strike is None or strike <= 0 or oi is None or oi < 0 or side not in ('CE', 'PE'):
+            return None
+        pair = grouped.setdefault(strike, {})
+        if side in pair:
+            return None
+        pair[side] = oi
+    if not grouped or any(set(p) != {'CE', 'PE'} for p in grouped.values()):
+        return None
+    if not any(p['CE'] or p['PE'] for p in grouped.values()):
+        return None
+    scores = {settle: sum(max(settle-strike, 0)*p['CE'] + max(strike-settle, 0)*p['PE'] for strike, p in grouped.items()) for settle in grouped}
+    minimum = min(scores.values())
+    return {'strikes': sorted(k for k, v in scores.items() if v == minimum), 'strike_count': len(grouped),
+            'scope': 'Returned strikes only; full expiry coverage is not verified. OI-based estimate, not a forecast.'}
+
 def chain_analysis(record,clock,options=None):
     if not record:return {'status':'NOT_FETCHED','contracts':[],'pcr_oi':None,'pcr_volume':None,'pcr_history':None,'iv_percentile':None}
     m=record.get('metadata',{});raw=record.get('raw',{}).get('data',{});oc=raw.get('oc',{})
@@ -158,6 +180,7 @@ def chain_analysis(record,clock,options=None):
     return {'status':state['state'],'freshness':state,'index':m.get('index'),'expiry':m.get('expiry'),
             'received_at':m.get('fetched_at'),'exchange_at':m.get('exchange_at'),'source':'Dhan optionchain',
             'spot':number(raw.get('last_price')),'contracts':sorted(rows,key=lambda r:(r['strike'],r['side'])),
+            'returned_strike_max_pain':returned_strike_max_pain(rows,m.get('expiry')),
             'pcr_oi':ratio('oi'),'pcr_volume':ratio('volume'),'pcr_basis':'All returned strikes of this expiry; stale snapshot context only when not FRESH',
             'pcr_history':None,'pcr_history_reason':'Continuous timestamped cadence is not established',
             'iv_percentile':None,'iv_percentile_reason':'Verified comparable IV history required',
