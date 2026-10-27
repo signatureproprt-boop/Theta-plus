@@ -34,6 +34,33 @@ assert sum(traffic.values())==100 and all(re.fullmatch(r'[a-z0-9-]+',k) for k in
 PY
 rollback=$(cat "$work/rollback")
 url=$(cat "$work/url")
+# A legacy-only rollout must never inherit an unpromoted VM gateway template.
+# Stop if the active owner has moved; never treat unknown status as legacy.
+check_legacy() {
+  python3 - "$url" <<'PYLEGACY'
+import json,sys,urllib.request
+with urllib.request.urlopen(sys.argv[1]+'/api/migration/status',timeout=20) as r: d=json.load(r)
+if d.get('protocol')!='unified-handover-v1' or d.get('state')!='LEGACY_BACKEND':
+    raise SystemExit('LEGACY_ROLLOUT_BLOCKED: migration state is not LEGACY_BACKEND')
+PYLEGACY
+}
+check_legacy
+# Verify every serving revision is a legacy revision before changing the template.
+python3 - "$work/before.json" <<'PYREVISIONS' > "$work/serving.txt"
+import json,sys
+s=json.load(open(sys.argv[1]))
+for t in s['status']['traffic']:
+    if t.get('percent',0)>0: print(t['revisionName'])
+PYREVISIONS
+while IFS= read -r rev; do
+  gcloud run revisions describe "$rev" --project="$project" --region="$region" --format=json > "$work/serving.json"
+  python3 - "$work/serving.json" <<'PYROUTE'
+import json,sys
+r=json.load(open(sys.argv[1]))
+if any(e.get('name')=='THETA_UNIFIED_UPSTREAM' and (e.get('value') or e.get('valueFrom')) for c in r['spec']['containers'] for e in c.get('env',[])):
+    raise SystemExit('LEGACY_ROLLOUT_BLOCKED: serving revision is a gateway')
+PYROUTE
+done < "$work/serving.txt"
 candidate=${1:-}
 if [[ -n $candidate ]]; then
   [[ $candidate =~ ^theta-plus-f380-[0-9]{14}$ ]] || { echo 'Invalid candidate revision' >&2; exit 1; }
@@ -46,13 +73,14 @@ else
   candidate="$service-$suffix"
   echo "Building candidate $candidate; existing traffic remains unchanged."
   gcloud run deploy "$service" --source=. --project="$project" --region="$region" \
-    --build-service-account="$build_account" --revision-suffix="$suffix" --no-traffic --quiet
+    --build-service-account="$build_account" --revision-suffix="$suffix" --remove-env-vars=THETA_UNIFIED_UPSTREAM --no-traffic --quiet
 fi
 gcloud run revisions describe "$candidate" --project="$project" --region="$region" --format=json > "$work/candidate.json"
 python3 - "$work/candidate.json" <<'PY'
 import json,sys
 r=json.load(open(sys.argv[1]))
 assert any(c['type']=='Ready' and c['status']=='True' for c in r['status']['conditions']),'Candidate not ready'
+assert not any(e.get('name')=='THETA_UNIFIED_UPSTREAM' and (e.get('value') or e.get('valueFrom')) for c in r['spec']['containers'] for e in c.get('env',[])), 'LEGACY_ROLLOUT_BLOCKED: candidate is a gateway'
 PY
 gcloud run services describe "$service" --project="$project" --region="$region" --format=json > "$work/current.json"
 python3 - "$work/before.json" "$work/current.json" <<'PY'
@@ -61,6 +89,7 @@ def traffic(p):
  return {t['revisionName']:t['percent'] for t in json.load(open(p))['status']['traffic'] if t.get('percent',0)>0}
 assert traffic(sys.argv[1])==traffic(sys.argv[2]),'Traffic changed during build; deployment stopped before promotion'
 PY
+check_legacy
 promoted=true
 gcloud run services update-traffic "$service" --project="$project" --region="$region" --to-revisions="$candidate=100" --quiet
 # Poll through routing propagation, requiring the exact candidate identity.
@@ -97,7 +126,7 @@ from hashlib import sha256
 from urllib.request import urlopen
 import sys
 url=sys.argv[1]
-for name in ('market-home.js','market-home.css','dhan-desk.css','instruments.js','app.js','collection.js','dashboard.js','dashboard.css','research.js','terminal.js','research-live.js','chart-data.js','price-chart.js','vendor/lightweight-charts-5.2.1.js'):
+for name in ('market-home.js','market-home.css','dhan-desk.css','instruments.js','app.js','collection.js','dashboard.js','dashboard.css','trading-room-dark.css','research.js','terminal.js','research-live.js','chart-data.js','price-chart.js','vendor/lightweight-charts-5.2.1.js'):
     expected=sha256((Path('static')/name).read_bytes()).hexdigest()
     with urlopen(url+'/static/'+name+'?release=dashboard',timeout=30) as response:
         observed=sha256(response.read()).hexdigest()
