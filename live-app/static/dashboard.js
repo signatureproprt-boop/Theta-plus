@@ -3,7 +3,7 @@
   const esc=v=>String(v??'—').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const fmt=v=>typeof v==='number'&&Number.isFinite(v)?v.toLocaleString('en-IN',{maximumFractionDigits:2}):'—';
   const levels=[
-    ['Market basics','OI PCR','Volume PCR','Futures VWAP','Option Greeks','India VIX'],
+    ['Market basics','OI PCR','Volume PCR','Futures VWAP','Delta','Gamma','Theta','Vega','India VIX'],
     ['Market structure','Max Pain','OI quadrant','IV skew','Support / resistance'],
     ['Options exposure','GEX','DEX','VEX / CEX','Gamma wall','Term structure'],
     ['Order flow','CVD','Volume profile','Expiry-day context','Probability model'],
@@ -18,7 +18,7 @@
     const d=snapshot.data||{},c=d.chain||{},selected=snapshot.selected;
     if(name==='OI PCR'||name==='Volume PCR')return {value:name==='OI PCR'?c.pcr_oi:c.pcr_volume,state:c.status||'NOT_LOADED',source:'Dhan chain · current snapshot',time:c.exchange_at};
     if(name==='Futures VWAP'){const f=snapshot.context?.futures_vwap||d.futures_context;return f?{value:f.value,state:f.state,source:'Exact futures candles',time:f.exchange_at}:missing;}
-    if(name==='Option Greeks')return {value:selected?.greeks?.delta,state:selected?.greeks?'PROVIDER_OBSERVATION':'UNAVAILABLE',source:'Selected contract · delta',time:selected?.exchange_at};
+    if(['Delta','Gamma','Theta','Vega'].includes(name)){const value=selected?.greeks?.[name.toLowerCase()];const available=selected?.identity_verified && selected?.freshness==='FRESH' && typeof value==='number' && Number.isFinite(value);return {value:available?value:null,state:available?'FRESH':'UNAVAILABLE',source:'Selected verified contract · '+name,time:available?selected.exchange_at:null};}
     return missing;
   }
   function metric(name,snapshot){
