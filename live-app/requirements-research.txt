@@ -1,0 +1,9 @@
+vollib
+openalgo
+smartmoneyconcepts
+numpy
+pandas
+scipy
+scikit-learn
+plotly
+xgboost-cpu
