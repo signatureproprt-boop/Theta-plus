@@ -246,3 +246,14 @@ test('live validator renders blocked checks with escaped evidence without provid
   assert.match(html,/&lt;bad-source&gt;/);assert.doesNotMatch(html,/<bad-source>/);
   assert.ok(e.calls.every(c=>!c.o.method||c.o.method==='GET'));
 });
+
+test('five-strike zone sums only a complete same-expiry snapshot',async()=>{
+  const expiry='2026-10-27';
+  const contracts=[100,200,300,400,500,600,700].flatMap((strike,i)=>['CE','PE'].map(side=>({expiry,strike,side,security_id:side+strike,delta_oi:side==='CE'?i+1:-(i+1)})));
+  const e=environment('research',{chain:{expiry,spot:400,status:'TIME_UNVERIFIED',contracts}});await e.flush();
+  const html=e.element('page-research').innerHTML;
+  assert.match(html,/5-STRIKE ATM ZONE/);assert.match(html,/Call OI change <b>20<\/b>/);assert.match(html,/Put OI change <b>-20<\/b>/);assert.match(html,/versus previous-day OI/);assert.match(html,/TIME_UNVERIFIED/);
+  e.data.chain.contracts[3].delta_oi=null;
+  await e.element('research-refresh').onclick();await e.flush();
+  assert.match(e.element('page-research').innerHTML,/Call OI change <b>Unavailable<\/b>/);
+});
