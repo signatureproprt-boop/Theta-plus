@@ -19,10 +19,10 @@
     if(!L){if(readout)readout.textContent='Chart library unavailable. Reload to retry; saved data is retained.';return;}
     if(view&&(view.element!==element||view.key!==model.key))dispose();
     if(!view){
-      const chart=L.createChart(element,{autoSize:true,layout:{background:{type:L.ColorType.Solid,color:'#ffffff'},textColor:'#63748a',fontSize:11,attributionLogo:true},
-        grid:{vertLines:{color:'#f0f3f7'},horzLines:{color:'#edf1f6'}},crosshair:{mode:L.CrosshairMode.Normal},
-        rightPriceScale:{borderColor:'#dce4ed',scaleMargins:{top:.12,bottom:.12}},
-        timeScale:{borderColor:'#dce4ed',timeVisible:true,secondsVisible:false,rightOffset:6,barSpacing:8,
+      const chart=L.createChart(element,{autoSize:true,layout:{background:{type:L.ColorType.Solid,color:'#0a1725'},textColor:'#a9bdd2',fontSize:11,attributionLogo:true},
+        grid:{vertLines:{color:'#172a3b'},horzLines:{color:'#172a3b'}},crosshair:{mode:L.CrosshairMode.Normal},
+        rightPriceScale:{borderColor:'#304457',scaleMargins:{top:.12,bottom:.12}},
+        timeScale:{borderColor:'#304457',timeVisible:true,secondsVisible:false,rightOffset:6,barSpacing:8,
           tickMarkFormatter:(t,type)=>[L.TickMarkType.Time,L.TickMarkType.TimeWithSeconds].includes(type)?time.format(new Date(t*1000)):calendar.format(new Date(t*1000))},
         localization:{locale:'en-IN',timeFormatter:t=>date.format(new Date(t*1000))+' IST'},
         handleScroll:{mouseWheel:true,pressedMouseMove:true,horzTouchDrag:true,vertTouchDrag:false},handleScale:{mouseWheel:true,pinch:true,axisPressedMouseMove:true}});

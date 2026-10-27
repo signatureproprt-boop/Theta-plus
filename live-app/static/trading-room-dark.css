@@ -1,0 +1,32 @@
+/* Compact research desk; existing screens and controls remain available. */
+#page-research{--bg:#071322;--line:#263e52;--muted:#9ab0c6;color:#d5e3ef;background:#071322;font-size:12px}
+#page-research .research-layout{grid-template-columns:minmax(0,1fr) 250px;gap:8px}
+#page-research .research-main,#page-research .research-aside{min-width:0}
+#page-research .research-section,#page-research .foundation-strip{background:#0b1a2a;color:#d5e3ef;border:1px solid #263e52;border-radius:5px;padding:10px;margin-bottom:8px;box-shadow:none}
+#page-research .research-toolbar{background:#071322;position:relative;top:auto;color:#d5e3ef}
+#page-research h2,#page-research h3,#page-research strong,#page-research b{color:#e3eef8}
+#page-research .research-help,#page-research .research-meta,#page-research small,#page-research .analysis-heading p{color:#9ab0c6}
+#page-research .button,#page-research button,#page-research select,#page-research input,#page-research textarea{background:#10283b;border-color:#36536a;color:#d5e3ef}
+#page-research button[aria-pressed=true],#page-research button[aria-selected=true]{background:#17649c;border-color:#369be2;color:#fff}
+#page-research .research-state,#page-research .foundation-decision{color:#ffd783}
+#page-research .foundation-strip{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+#page-research .foundation-cell{padding:8px;border-color:#263e52}
+#page-research .room-workbench{display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,42%);gap:8px;align-items:start}
+#page-research .room-workbench>*{min-width:0;margin:0}
+#page-research .room-chart #research-chart.price-action-chart{height:430px;min-height:300px;background:#0a1725;border-color:#263e52}
+#page-research .room-chart .chart-ohlc,#page-research .indicator-heading{color:#bfd0df}
+#page-research .indicator-values,#page-research .analysis-metric,#page-research .pcr-summary>div{background:#102234;border-color:#263e52;color:#d5e3ef;padding:8px}
+#page-research .research-table th,#page-research .research-table td{border-color:#263e52;color:#d5e3ef}
+#page-research .research-table th{background:#132c40}
+#page-research .compact-chain{min-width:530px}
+#page-research .chain-atm th,#page-research .chain-atm td{background:#1a4566}
+#page-research .chain-pick{color:#6edbc7}
+#page-research .analysis-tabs{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:4px}
+#page-research .analysis-tabs button{min-height:38px;padding:5px;justify-content:center;flex-wrap:wrap}
+#page-research .analysis-status{background:#193047;border-color:#36536a;color:#b6cadd}
+#page-research .analysis-metric>strong{font-size:16px;margin:3px 0}
+#page-research .room-chart.chart-expanded{background:#071322}
+#page-research .research-chart{background:#0a1725}
+#page-research a{color:#8bc9ff}
+@media(max-width:1200px){#page-research .research-layout{grid-template-columns:1fr}#page-research .research-aside{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}#page-research .research-aside>*{min-width:0}}
+@media(max-width:760px){#page-research .room-workbench{grid-template-columns:1fr}#page-research .analysis-tabs{display:flex;overflow-x:auto}#page-research .analysis-tabs button{flex:0 0 95px;min-height:44px}#page-research .research-aside{grid-template-columns:1fr}#page-research .room-chart #research-chart.price-action-chart{height:350px}}
