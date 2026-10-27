@@ -17,6 +17,7 @@
   function observation(name,snapshot){
     const d=snapshot.data||{},c=d.chain||{},selected=snapshot.selected;
     if(name==='OI PCR'||name==='Volume PCR')return {value:name==='OI PCR'?c.pcr_oi:c.pcr_volume,state:c.status||'NOT_LOADED',source:'Dhan chain · current snapshot',time:c.exchange_at};
+    if(name==='Max Pain'){const m=c.returned_strike_max_pain;return {value:m?.strikes?.length===1?m.strikes[0]:null,state:m?(m.strikes.length===1?(c.status||'TIME_UNVERIFIED'):'MULTIPLE_MINIMA'):'UNAVAILABLE',source:m?`Returned ${m.strike_count} strikes only · full expiry unverified`: 'Complete returned CE/PE OI required',time:c.exchange_at};}
     if(name==='Futures VWAP'){const f=snapshot.context?.futures_vwap||d.futures_context;return f?{value:f.value,state:f.state,source:'Exact futures candles',time:f.exchange_at}:missing;}
     if(['Delta','Gamma','Theta','Vega'].includes(name)){const value=selected?.greeks?.[name.toLowerCase()];const available=selected?.identity_verified && selected?.freshness==='FRESH' && typeof value==='number' && Number.isFinite(value);return {value:available?value:null,state:available?'FRESH':'UNAVAILABLE',source:'Selected verified contract · '+name,time:available?selected.exchange_at:null};}
     return missing;
